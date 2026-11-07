@@ -6,7 +6,7 @@ Autonomous racing-based LLM CTF solver: several models attack the same challenge
 
 | Challenge | Solved | Wall clock | Evidence |
 |:-:|:-:|:-:|:-:|
-| CSAW26 qualifiers | 6 / 16  (37.5%) | 48 min | [SUBMISSION.md](SUBMISSION.md) |
+| CSAW26 qualifiers | 6 / 16  (37.5%) | 48 min | [Logs](logs/evals/20261106-232811__eval/)  ·  [Writeup](SUBMISSION.md) |
 
 ## How it works
 
@@ -76,7 +76,7 @@ Exit codes: `0` solved · `1` unsolved · `2` usage error · `3` runtime error.
 | `lanes.toml`, `overrides.toml` | Lane roster, loader-side fixes for defective dataset manifests |
 | `docker/sandbox/` | Sandbox image: pwntools, Ghidra, SageMath, angr, gdb, qemu-user |
 | `scripts/`, `tests/` | Flag-leak audit and race viewer, 54 unit tests |
-| `competition/2025/`, `logs/evals/` | Challenge set (read-only), committed run evidence |
+| `competition/2025/`, [`logs/evals/`](logs/evals/20261106-232811__eval/) | Challenge set (read-only), committed run evidence |
 
 ## Dataset policy
 
