@@ -1,0 +1,238 @@
+[01] run_command ls -la /home/ctfplayer/ctf_files/ && find /home/ctfplayer/ctf_files -type f -exec file {} \;
+[01] run_command cat /tools.txt | head -100
+[02] run_command cd /home/ctfplayer/ctf_files/dist && ls -la && wc -c scrambled && xxd scrambled | head -50 && strings -n 4 scrambled | head -100
+[03] run_command cd /home/ctfplayer/ctf_files/dist && xxd scrambled | tail -60
+[03] run_command cd /home/ctfplayer/ctf_files/dist && python3 -c "
+d=open('scrambled','rb').read()
+print(len(d))
+from collections import Counter
+c=Counter(d)
+print(len(c), c.most_common(10))
+"
+[06] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+d=open('/home/ctfplayer/ctf_files/dist/scrambled','rb').read()
+print('len',len(d))
+# tail region
+print(repr(d[-80:]))
+# repeated 8-byte blocks aligned to offset 0
+from collections import defaultdict
+pos=defaultdict(list)
+for off in range(0,len(d)-7,8):
+    pos[d[off:off+8]].append(off)
+for k,v in sorted(pos.items(), key=lambda kv:-len(kv[1]))[:20]:
+    print(len(v), [hex(x) for x in v[:10]], k.hex())
+EOF
+[06] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+d=open('/home/ctfplayer/ctf_files/dist/scrambled','rb').read()
+# find all repeated 8-byte substrings at any offset
+from collections import defaultdict
+pos=defaultdict(list)
+for off in range(0,len(d)-7):
+    pos[d[off:off+8]].append(off)
+reps={k:v for k,v in pos.items() if len(v)>1}
+print('num repeated 8-byte patterns',len(reps))
+# group by offset mod 8
+import collections
+mods=collections.Counter()
+for k,v in reps.items():
+    for o in v: mods[o%8]+=1
+print(mods)
+for k,v in sorted(reps.items(), key=lambda kv:-len(kv[1]))[:25]:
+    print(len(v), [hex(x) for x in v[:12]], k.hex())
+EOF
+[10] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+d=open('/home/ctfplayer/ctf_files/dist/scrambled','rb').read()
+# print hex dump of regions around duplicates
+def dump(a,b):
+    for off in range(a,b,16):
+        chunk=d[off:off+16]
+        print('%05x'%off, chunk.hex(' '), ''.join(chr(c) if 32<=c<127 else '.' for c in chunk))
+print("=== 0x280-0x3a0")
+dump(0x280,0x3a0)
+EOF
+[13] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+d=open('/home/ctfplayer/ctf_files/dist/scrambled','rb').read()
+def dump(a,b):
+    for off in range(a,b,16):
+        chunk=d[off:off+16]
+        print('%05x'%off, chunk.hex(' '), ''.join(chr(c) if 32<=c<127 else '.' for c in chunk))
+dump(0x0,0x80)
+print('--- region near 0x300/0x390 followup 0x300 long run')
+dump(0x2a0,0x320)
+EOF
+[15] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+d=open('/home/ctfplayer/ctf_files/dist/scrambled','rb').read()
+# Look at the tail: base64 string of 32 bytes => 44 chars. Check what precedes it.
+tail=d[-80:]
+print(repr(tail))
+import base64
+s=d[-46:-2]
+print(s)
+print(base64.b64decode(s))
+EOF
+[15] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+d=open('/home/ctfplayer/ctf_files/dist/scrambled','rb').read()
+# entropy per 64 bytes
+import math
+for off in range(0,len(d),256):
+    chunk=d[off:off+256]
+    c={}
+    for b in chunk: c[b]=c.get(b,0)+1
+    H=-sum(v/len(chunk)*math.log2(v/len(chunk)) for v in c.values())
+    print('%05x'%off, round(H,2), len(c))
+EOF
+[17] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+d=open('/home/ctfplayer/ctf_files/dist/scrambled','rb').read()
+i=d.find(b'ZWxlY3Ryb25pYyBjb29rYm9vaw==')
+print('offset',hex(i), i, len(d))
+print(repr(d[i-40:i]))
+print(repr(d[i+len(b'ZWxlY3Ryb25pYyBjb29rYm9vaw=='):]))
+import base64
+print(base64.b64decode(b'ZWxlY3Ryb25pYyBjb29rYm9vaw=='))
+EOF
+[19] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+d=open('/home/ctfplayer/ctf_files/dist/scrambled','rb').read()
+print(len(d), hex(len(d)))
+body=d[:0x1159]
+print(len(body))
+# Check if head/tail blocks repeat: list all 8-byte block values in first 64 bytes to see structure
+for off in range(0,0x120,8):
+    print(hex(off), d[off:off+8].hex())
+EOF
+[20] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+d=open('/home/ctfplayer/ctf_files/dist/scrambled','rb').read()
+i=d.find(b'ZWxlY3Ryb25pYyBjb29rYm9vaw==')
+print('body len',i, hex(i), 'mod 8', i%8)
+# check blocks before b64
+for off in range(i-64,i,8):
+    print(hex(off), d[off:off+8].hex())
+EOF
+[21] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import re
+d=open('/home/ctfplayer/ctf_files/dist/scrambled','rb').read()
+for m in re.finditer(rb'[ -~]{5,}', d):
+    print(hex(m.start()), m.group()[:100])
+EOF
+[22] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+d=open('/home/ctfplayer/ctf_files/dist/scrambled','rb').read()
+# check for 16-byte repeats at any offset
+from collections import defaultdict
+pos=defaultdict(list)
+for off in range(0,len(d)-15):
+    pos[d[off:off+16]].append(off)
+reps={k:v for k,v in pos.items() if len(v)>1}
+print('repeated 16-byte patterns:',len(reps))
+for k,v in sorted(reps.items(), key=lambda kv:-len(kv[1]))[:10]:
+    print(len(v), [hex(x) for x in v], k.hex())
+EOF
+[24] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+from collections import Counter
+d=open('/home/ctfplayer/ctf_files/dist/scrambled','rb').read()
+for off in range(0,0x120,32):
+    c=Counter(d[off:off+32])
+    print(hex(off), len(c), c.most_common(3))
+EOF
+[25] run_command cd /home/ctfplayer/workspace && xxd /home/ctfplayer/ctf_files/dist/scrambled | sed -n '1,30p'; echo ...; xxd /home/ctfplayer/ctf_files/dist/scrambled | sed -n '31,60p'
+[29] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+d=open('/home/ctfplayer/ctf_files/dist/scrambled','rb').read()
+i=d.find(b'ZWxlY3Ryb25pYyBjb29rYm9vaw==')
+# every 8-byte block in body, count occurrences
+from collections import Counter
+blocks=[d[o:o+8] for o in range(0,i,8)]
+print('num blocks', len(blocks), 'leftover', i%8)
+c=Counter(blocks)
+print('distinct', len(c))
+print('repeated blocks:')
+for b,n in c.most_common():
+    if n>1:
+        print(n, [hex(o) for o in range(0,i,8) if d[o:o+8]==b], b.hex())
+EOF
+[31] run_command ls -laR /home/ctfplayer/ctf_files/ ; echo ---; find /home/ctfplayer/ctf_files -mindepth 1 | sort; echo ---; find / -name '*scrambl*' -o -name '*DES*tiny*' 2>/dev/null | grep -v proc | head -50
+[31] get_findings {}
+[33] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+d=open('/home/ctfplayer/ctf_files/dist/scrambled','rb').read()
+i=d.find(b'ZWxlY3Ryb25pYyBjb29rYm9vaw==')
+print('b64 offset', i, hex(i), 'len', len(d))
+# body from 0 to i-1? last byte before b64 is 0x00
+print('bytes before b64:', d[i-8:i].hex())
+# Check for structure: maybe file is a sequence of records? Look at 0x1159 = 4441 = prime?
+import sympy
+print(sympy.factorint(4441), sympy.factorint(4470))
+# Maybe the file is a "scrambled" ELF: check if it's a permutation of a known file? Try checking whether byte histogram matches ELF-like distribution
+# print all offsets where a 16-byte chunk has high printable ratio
+EOF
+[35] run_command cd /home/ctfplayer/workspace && cat > look.py <<'EOF'
+from collections import defaultdict
+d=open('/home/ctfplayer/ctf_files/dist/scrambled','rb').read()
+i=d.find(b'ZWxlY3Ryb25pYyBjb29rYm9vaw==')
+body=d[:i]
+print('body len', len(body), 'mod 8 =', len(body)%8)
+# repeated 8-byte blocks imply ECB with 8-byte alignment; find offsets of all repeated blocks and compute differences
+pos=defaultdict(list)
+for off in range(0,len(body)-7,8):
+    pos[body[off:off+8]].append(off)
+rep={k:v for k,v in pos.items() if len(v)>1}
+offs=sorted(o for v in rep.values() for o in v)
+print('repeat offsets:', offs)
+EOF
+python3 look.py
+[36] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+from Crypto.Cipher import DES
+d=open('/home/ctfplayer/ctf_files/dist/scrambled','rb').read()
+i=d.find(b'ZWxlY3Ryb25pYyBjb29rYm9vaw==')
+body=d[:i- (i%8)]  # multiple of 8
+print('body',len(body))
+cands=[b'cookbook',b'electron',b'electronic',b'dorsey  ',b'twttr   ',b'twitter ',b'tiny    ',b'Echoes  ',b'echoes  ',b'DES     ',b'des     ',b'password',b'12345678',b'\x00'*8,b'\xff'*8,b'just set',b'justsettingupmytwttr',b'0123456789abcdef',b'deadbeef',b'secret  ',b'flag    ',b'csaw    ',b'probe   ',b'dorsey12',b'jackdorse',b'electric']
+def score(b):
+    return sum(1 for c in b if 32<=c<127 or c in (9,10,13))
+for k in cands:
+    try:
+        c=DES.new(k[:8], DES.MODE_ECB)
+        p=c.decrypt(body)
+        s=score(p)/len(p)
+        print(repr(k), round(s,3), p[:32])
+    except Exception as e:
+        print(k, e)
+EOF
+[41] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+d=open('/home/ctfplayer/ctf_files/dist/scrambled','rb').read()
+i=d.find(b'ZWxlY3Ryb25pYyBjb29rYm9vaw==')
+print('body ends at',i, 'bytes around 0x1150:')
+print(d[0x1140:i].hex(' '))
+# check whether body length 4441 = 8*555 + 1 ; maybe there's a 1-byte prefix
+print('first byte', hex(d[0]))
+# Try treating body as 555 blocks starting at offset 1
+from collections import Counter
+for start in (0,1):
+    end = start + ((i-start)//8)*8
+    blocks=[d[o:o+8] for o in range(start,end,8)]
+    c=Counter(blocks)
+    print('start',start,'nblocks',len(blocks),'distinct',len(c),'repeated',sum(1 for v in c.values() if v>1))
+EOF
+[44] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+d=open('/home/ctfplayer/ctf_files/dist/scrambled','rb').read()
+i=d.find(b'ZWxlY3Ryb25pYyBjb29rYm9vaw==')
+body=d[:i]
+# ECB: ciphertext blocks that are equal imply plaintext blocks equal. We have 24 repeated blocks in 555.
+# Guess: plaintext is a text file with 8-byte aligned repeated words? Let's try to find a DES key by known plaintext at block 0.
+# Maybe the plaintext starts with a known header. Consider that it's a scrambled ELF: header \x7fELF\x02\x01\x01\x00
+from Crypto.Cipher import DES
+# candidate key search using plaintext block0 = \x7fELF...
+# Instead: test if ciphertext is DES-CBC with zero IV? no.
+# Try known plaintext "csawctf{" at some block: for each block, for each candidate key? too big.
+# Better: brute force over keys derived from 'electronic cookbook' words? Try key = 'electronic'[:8] etc. (already)
+# Try DES with key from base64 decoded string: b'electronic cookbook' -> key 'electron'
+# Try 3DES?
+# Let's check if the ciphertext could be produced by DES with key = the b64 string bytes (16 bytes) as 2-key 3DES
+from Crypto.Cipher import DES3
+for k in [b'electronic cookbook', b'electroniccookbook', b'electroniccookboo']:
+    try:
+        c=DES3.new(k, DES3.MODE_ECB)
+        p=c.decrypt(body[:len(body)//8*8])
+        print(k, p[:32].hex())
+    except Exception as e:
+        print(k,'err',e)
+EOF
+[47] record_finding {"text": "scrambled = 4470 bytes. data[:4440] = 555 x 8-byte blocks (DES/ECB-sized). Tail: 0x00 + b\"ZWxlY3Ryb25pYyBjb29rYm9vaw==\" + b\"\\n\", base64 decodes to \"electronic cookbook\" = ECB-mode hint. 24 ciphertext block values repeat (most common 7b66b3caa4baae7c x9) => plaintext has few repeated aligned blocks, consistent with a text/source file rather than ELF with zero padding. Hypothesis: standard DES-ECB with a tiny/low-entropy key; plaintext likely ~4440 bytes of code/text.", "kind": "fact"}
+[47] run_command {}
+finished: aborted reason=aborted rounds=47 cost=$0.0774 transcript=C:\Users\Dingus\csaw26_llm_ctf\logs\evals\20261106-232811__eval\01__Echoes-of-DES-tiny\lane-2\20261106-234330__crypto_Echoes-of-DES-tiny_main_deepseek_deepseek-v4_1-flash-1017.json

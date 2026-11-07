@@ -137,11 +137,15 @@ overrides.toml           # loader-side corrections for dataset defects
 # 1. Configure credentials
 cp .env.example .env
 #    OPENROUTER_API_KEY, OPENROUTER_MODEL, OPENROUTER_COMPACT_MODEL
+#    Windows PowerShell: Copy-Item .env.example .env
 
 # 2. Build the sandbox image (takes a while: Ghidra, SageMath, angr, ...)
 bash docker/build_sandbox.sh
 #    lightweight build without cado-nfs:
 #    EXTRA_BUILD_ARGS="--build-arg WITH_HEAVY=0" bash docker/build_sandbox.sh
+#    Windows PowerShell (no bash):
+#    docker build -t ctfenv:antihydra docker/sandbox
+#    docker network create ctfnet    # "already exists" -> harmless
 
 # 3. Explore
 python solve.py --list

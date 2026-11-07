@@ -1,0 +1,424 @@
+[01] run_command ls -la /home/ctfplayer/ctf_files/ /home/ctfplayer/ctf_files/dist/ 2>/dev/null; file /home/ctfplayer/ctf_files/dist/whitespace_compiler
+[01] run_command cat /tools.txt 2>/dev/null | head -50
+[02] run_command cd /home/ctfplayer/ctf_files/dist && strings -n 8 whitespace_compiler | head -80
+[02] run_command cd /home/ctfplayer/ctf_files/dist && nm whitespace_compiler 2>/dev/null | head -50; echo ---; readelf -h whitespace_compiler
+[03] run_command cd /home/ctfplayer/ctf_files/dist && nm whitespace_compiler 2>/dev/null | grep -i -E " (t|T) " | grep -v "_ZN4core\|_ZN5alloc\|_ZN[0-9]*std\|_ZN[0-9]*compiler_builtins\|_ZN[0-9]*gimli\|_ZN[0-9]*addr2line\|_ZN[0-9]*object\|_ZN[0-9]*hashbrown\|_ZN[0-9]*memchr\|_ZN[0-9]*panic" | head -100
+[04] run_command cd /home/ctfplayer/ctf_files/dist && nm whitespace_compiler 2>/dev/null | grep -E " main$|\.main" | head; echo "=== all main-ish ==="; nm whitespace_compiler | grep -i "main" | grep -v Cfunc | head -20
+[04] run_command cd /home/ctfplayer/ctf_files/dist && strings -n 6 whitespace_compiler | grep -i -E "usage|flag|whitespace|\.ws\b|stega|hidden" | head -40
+[05] run_command cd /home/ctfplayer/ctf_files/dist && nm whitespace_compiler | grep -E "^0[0-9a-f]+ t main\.|main\.main" | head -40
+[05] run_command cd /home/ctfplayer/ctf_files/dist && strings -n 4 whitespace_compiler | grep -E "^main\." | sort -u | head -60
+[06] run_command cd /home/ctfplayer/ctf_files/dist && strings -n 5 whitespace_compiler | grep -i -E "invader|score|game over|csaw|space|bullet|alien|wave|level" | sort -u | head -60
+[06] run_command cd /home/ctfplayer/ctf_files/dist && strings -n 4 whitespace_compiler | grep -iE "png|jpg|jpeg|assets|embed" | sort -u | head -40
+[07] run_command cd /home/ctfplayer/ctf_files/dist && strings -n 3 whitespace_compiler | grep -E "\.(png|jpg|jpeg|webp|svg)$" | sort -u | head -40
+[07] run_command cd /home/ctfplayer/ctf_files/dist && objdump -d --start-address=0xada840 --stop-address=0xadb080 whitespace_compiler 2>/dev/null | head -120
+[08] run_command cd /home/ctfplayer/ctf_files/dist && objdump -s -j .rodata whitespace_compiler 2>/dev/null | grep -A2 -B2 "ce1471" | head -20; echo "==="; python3 -c "
+import subprocess
+# extract string at vaddr 0xce1471 length 0x11
+" ; readelf -S whitespace_compiler | grep -A1 rodata
+[09] run_command cd /home/ctfplayer/ctf_files/dist && python3 -c "
+import struct
+f=open('whitespace_compiler','rb')
+def rd(vaddr,ln):
+    off = vaddr - 0xb67000 + 0x767000
+    f.seek(off); return f.read(ln)
+print('0xce1471 len 0x11:', rd(0xce1471,0x11))
+print('0xce4678 len 0x13:', rd(0xce4678,0x13))
+print('0xc90b60:', rd(0xc90b60,0x40))
+"
+[10] run_command cd /home/ctfplayer/ctf_files/dist && python3 -c "
+f=open('whitespace_compiler','rb')
+data=f.read()
+import re
+# find all printable strings starting around ce1000-ce5000 region
+start=0xce1000-0xb67000+0x767000
+end=0xce5000-0xb67000+0x767000
+chunk=data[start:end]
+for m in re.finditer(rb'[ -~]{4,}', chunk):
+    print(hex(0xce1000+m.start()), m.group()[:80])
+" | head -60
+[11] run_command cd /home/ctfplayer/ctf_files/dist && python3 -c "
+f=open('whitespace_compiler','rb')
+data=f.read()
+import re
+for m in re.finditer(rb'assets/[ -~]{2,60}', data):
+    print(hex(m.start()), m.group()[:100])
+" | head -40
+[12] run_command cd /home/ctfplayer/ctf_files/dist && python3 -c "
+f=open('whitespace_compiler','rb')
+data=f.read()
+import re
+for m in re.finditer(rb'<svg', data):
+    print(hex(m.start()), data[m.start():m.start()+120])
+" | head -20
+[13] run_command cd /home/ctfplayer/ctf_files/dist && python3 -c "
+f=open('whitespace_compiler','rb')
+data=f.read()
+# player.svg at 0x8e1471 is a string constant ref (vaddr). Its referenced data is elsewhere.
+# Find 'assets/player.svg' actual bytes
+import re
+for m in re.finditer(rb'assets/(player|enemy)\.svg', data):
+    print('bytes at', hex(m.start()), m.group())
+# enemy svg ref vaddr 0x8dfd21 -> compute embedded rodata vaddr
+# go:string.* symbol base:
+" ; nm whitespace_compiler | grep "go:string" | head
+[13] run_command cd /home/ctfplayer/ctf_files/dist && objdump -d --start-address=0xadc6c0 --stop-address=0xadcba0 whitespace_compiler 2>/dev/null | grep -E "lea|mov \\\$0x" | head -60
+[14] run_command cd /home/ctfplayer/ctf_files/dist && python3 -c "
+f=open('whitespace_compiler','rb')
+data=f.read()
+def rd(vaddr,ln):
+    off = vaddr - 0xb67000 + 0x767000
+    f.seek(off); return f.read(ln)
+print('cd69a1:', rd(0xcd69a1,0x30))
+print('ce468b:', rd(0xce468b,0x40))
+print('cd7901:', rd(0xcd7901,0x30))
+print('cd3008:', rd(0xcd3008,0x30))
+"
+[15] run_command cd /home/ctfplayer/ctf_files/dist && objdump -d --start-address=0xada840 --stop-address=0xada860 whitespace_compiler 2>/dev/null | tail -5; echo ===; objdump -d --start-address=0xadb080 --stop-address=0xadb400 whitespace_compiler 2>/dev/null | grep -E "lea " | head -40
+[16] run_command cd /home/ctfplayer/ctf_files/dist && objdump -d --start-address=0xadb080 --stop-address=0xadc220 whitespace_compiler 2>/dev/null | grep -E "lea .*rip.*#" | awk '{print $NF}' | sort | uniq -c | sort -rn | head -40
+[17] run_command cd /home/ctfplayer/ctf_files/dist && objdump -d --start-address=0xadb080 --stop-address=0xadc220 whitespace_compiler 2>/dev/null | grep -E "lea .*rip" | head -60
+[18] run_command cd /home/ctfplayer/ctf_files/dist && python3 -c "
+f=open('whitespace_compiler','rb')
+data=f.read()
+def rd(vaddr,ln):
+    off = vaddr - 0xb67000 + 0x767000
+    f.seek(off); return f.read(ln)
+# rodata starts 0xb67000 file 0x767000
+for va in (0xbc25a0, 0xc3d4c0, 0xc15160, 0xc3d560):
+    print(hex(va), rd(va,64))
+"
+[19] run_command cd /home/ctfplayer/ctf_files/dist && objdump -d --start-address=0xadcec0 --stop-address=0xadd100 whitespace_compiler 2>/dev/null | head -150
+[20] run_command cd /home/ctfplayer/ctf_files/dist && nm whitespace_compiler | grep -E "whitespace_compiler/" | grep -v Cfunc | head -60
+[20] run_command cd /home/ctfplayer/ctf_files/dist && python3 -c "
+f=open('whitespace_compiler','rb')
+data=f.read()
+def rd(vaddr,ln):
+    off = vaddr - 0xb67000 + 0x767000
+    f.seek(off); return f.read(ln)
+print('bc2360:', rd(0xbc2360,0x20))
+print('cdfd31:', rd(0xcdfd31,0x20))
+print('ddc310 (stmp):', rd(0xddc310,0x20))
+"; readelf -S whitespace_compiler | grep -E "nop|data" | head
+[21] run_command cd /home/ctfplayer/ctf_files/dist && python3 -c "
+f=open('whitespace_compiler','rb')
+data=f.read()
+def rd(vaddr,ln):
+    off = vaddr - 0xb67000 + 0x767000
+    f.seek(off); return f.read(ln)
+print('cf6f68:', rd(0xcf6f68,0x1d))
+print('cf69c1:', rd(0xcf69c1,0x1f))
+"
+[21] run_command cd /home/ctfplayer/ctf_files/dist && objdump -d --start-address=0x525700 --stop-address=0x525840 whitespace_compiler 2>/dev/null | head -120
+[22] run_command cd /home/ctfplayer/ctf_files/dist && objdump -d --start-address=0x525840 --stop-address=0x526200 whitespace_compiler 2>/dev/null | head -250
+[23] run_command cd /home/ctfplayer/ctf_files/dist && objdump -d --start-address=0xadcec0 --stop-address=0xadd000 whitespace_compiler 2>/dev/null | sed -n '1,200p'
+[24] run_command cd /home/ctfplayer/ctf_files/dist && objdump -d --start-address=0x525c2b --stop-address=0x525cf0 whitespace_compiler 2>/dev/null | sed -n '5,60p'
+[25] run_command cd /home/ctfplayer/ctf_files/dist && python3 -c "
+f=open('whitespace_compiler','rb')
+data=f.read()
+def rd(vaddr,ln):
+    off = vaddr - 0xb67000 + 0x767000
+    f.seek(off); return f.read(ln)
+print('cde980 (0xf):', rd(0xcde980,0x15))
+"
+[25] run_command cd /home/ctfplayer/ctf_files/dist && readelf -S whitespace_compiler | grep -E "gopclntab|go.buildinfo|\.data|\.rodata|\.text" 
+[26] run_command cd /home/ctfplayer/ctf_files/dist && python3 - <<'EOF'
+import struct
+data=open('whitespace_compiler','rb').read()
+# gopclntab
+off=0xa3a4e0
+magic=struct.unpack('<I', data[off:off+4])[0]
+print(hex(magic))  # 1.20+: 0xfffffff1 (1.20), 0xfffffff0 (1.18), 1.21+ ffffff...? 
+print(data[off:off+16].hex())
+# parse header: magic, pad1,pad2, minLC, ptrsize, nfunc, nfiles
+quant = data[off+6]
+ptrsize = data[off+7]
+nfunc, nfiles = struct.unpack('<QQ', data[off+8:off+24])
+print('nfunc', nfunc, 'nfiles', nfiles, 'quant', quant, 'ptr', ptrsize)
+# funcnametab offset etc at offsets 24.. (1.18+: textStart, funcnameOffset, cuOffset, filetabOffset, pctabOffset, pclnOffset)
+textStart, funcnameOff, cuOff, filetabOff, pctabOff, pclnOff = struct.unpack('<6Q', data[off+24:off+24+48])
+print('textStart', hex(textStart))
+print('funcnameOff', hex(funcnameOff), 'cuOff', hex(cuOff), 'filetabOff', hex(filetabOff), 'pctabOff', hex(pctabOff), 'pclnOff', hex(pclnOff))
+base=off
+ftab = base + pclnOff
+# ftab: nfunc+1 entries of (entryoff uint32, funcoff uint32)
+def funcname(i):
+    entryoff, funcoff = struct.unpack('<II', data[ftab+i*8: ftab+i*8+8])
+    fo = ftab + funcoff
+    nameoff = struct.unpack('<I', data[fo+8:fo+12])[0]
+    nstart = base + funcnameOff + nameoff
+    nend = data.index(b'\x00', nstart)
+    return entryoff, data[nstart:nend].decode()
+names=[]
+for i in range(nfunc):
+    e,n = funcname(i)
+    names.append((e,n))
+import re
+for e,n in names:
+    if 'whitespace_compiler' in n or n.startswith('main.'):
+        print(hex(textStart+e), n)
+EOF
+[27] run_command cd /home/ctfplayer/ctf_files/dist && python3 - <<'EOF'
+import struct
+data=open('whitespace_compiler','rb').read()
+off=0xa3a4e0
+nfunc, nfiles = struct.unpack('<QQ', data[off+8:off+24])
+textStart, funcnameOff, cuOff, filetabOff, pctabOff, pclnOff = struct.unpack('<6Q', data[off+24:off+24+48])
+base=off
+ftab = base + pclnOff
+names=[]
+for i in range(nfunc):
+    entryoff, funcoff = struct.unpack('<II', data[ftab+i*8: ftab+i*8+8])
+    fo = ftab + funcoff
+    nameoff = struct.unpack('<I', data[fo+8:fo+12])[0]
+    nstart = base + funcnameOff + nameoff
+    nend = data.index(b'\x00', nstart)
+    names.append((textStart+entryoff, data[nstart:nend].decode('utf-8','replace')))
+with open('/home/ctfplayer/workspace/gofuncs.txt','w') as f:
+    for e,n in names:
+        f.write(f'{e:x} {n}\n')
+import re
+for e,n in names:
+    if 'whitespace_compiler' in n or n.startswith('main.'):
+        print(hex(e), n)
+EOF
+[28] run_command cd /home/ctfplayer/ctf_files/dist && python3 - <<'EOF'
+import struct
+data=open('whitespace_compiler','rb').read()
+off=0xa3a4e0
+nfunc, nfiles = struct.unpack('<QQ', data[off+8:off+24])
+textStart, funcnameOff, cuOff, filetabOff, pctabOff, pclnOff = struct.unpack('<6Q', data[off+24:off+24+48])
+base=off
+ftab = base + pclnOff
+names=[]
+bad=0
+for i in range(nfunc):
+    entryoff, funcoff = struct.unpack('<II', data[ftab+i*8: ftab+i*8+8])
+    fo = ftab + funcoff
+    nameoff = struct.unpack('<I', data[fo+8:fo+12])[0]
+    nstart = base + funcnameOff + nameoff
+    j = data.find(b'\x00', nstart, nstart+400)
+    if j<0:
+        bad+=1; continue
+    names.append((textStart+entryoff, data[nstart:j].decode('utf-8','replace')))
+print('bad',bad,'ok',len(names))
+with open('/home/ctfplayer/workspace/gofuncs.txt','w') as f:
+    for e,n in names:
+        f.write(f'{e:x} {n}\n')
+for e,n in names:
+    if 'whitespace_compiler' in n or n.startswith('main.'):
+        print(hex(e), n)
+EOF
+[29] run_command cd /home/ctfplayer/ctf_files/dist && python3 - <<'EOF'
+import struct
+data=open('whitespace_compiler','rb').read()
+off=0xa3a4e0
+nfunc, nfiles = struct.unpack('<QQ', data[off+8:off+24])
+textStart, funcnameOff, cuOff, filetabOff, pctabOff, pclnOff = struct.unpack('<6Q', data[off+24:off+24+48])
+base=off
+ftab = base + pclnOff
+names=[]
+for i in range(nfunc):
+    entryoff, funcoff = struct.unpack('<II', data[ftab+i*8: ftab+i*8+8])
+    fo = ftab + funcoff
+    nameoff = struct.unpack('<I', data[fo+8:fo+12])[0]
+    nstart = base + funcnameOff + nameoff
+    j = data.find(b'\x00', nstart, nstart+400)
+    if j<0:
+        continue
+    names.append((textStart+entryoff, data[nstart:j].decode('utf-8','replace')))
+for e,n in names:
+    if 'whitespace' in n.lower() or n.startswith('main.'):
+        print(hex(e), n)
+EOF
+[30] run_command head -5 /home/ctfplayer/workspace/gofuncs.txt; wc -l /home/ctfplayer/workspace/gofuncs.txt; grep -i whitespace /home/ctfplayer/workspace/gofuncs.txt | head; grep -E " (main\.|whitespace)" /home/ctfplayer/workspace/gofuncs.txt | head
+[31] run_command cd /home/ctfplayer/ctf_files/dist && python3 - <<'EOF'
+import struct
+data=open('whitespace_compiler','rb').read()
+off=0xa3a4e0
+nfunc, nfiles = struct.unpack('<QQ', data[off+8:off+24])
+textStart, funcnameOff, cuOff, filetabOff, pctabOff, pclnOff = struct.unpack('<6Q', data[off+24:off+24+48])
+base=off
+ftab = base + pclnOff
+names=[]
+for i in range(nfunc):
+    entryoff, funcoff = struct.unpack('<II', data[ftab+i*8: ftab+i*8+8])
+    fo = ftab + funcoff
+    nameoff = struct.unpack('<i', data[fo+4:fo+8])[0]
+    nstart = base + funcnameOff + nameoff
+    j = data.find(b'\x00', nstart, nstart+400)
+    if j<0: continue
+    names.append((textStart+entryoff, data[nstart:j].decode('utf-8','replace')))
+with open('/home/ctfplayer/workspace/gofuncs.txt','w') as f:
+    for e,n in names:
+        f.write(f'{e:x} {n}\n')
+for e,n in names:
+    if 'whitespace' in n.lower() or n.startswith('main.'):
+        print(hex(e), n)
+EOF
+[32] run_command cd /home/ctfplayer/ctf_files/dist && objdump -d --start-address=0x525840 --stop-address=0x525d00 whitespace_compiler 2>/dev/null | sed -n '5,400p'
+[33] run_command cd /home/ctfplayer/ctf_files/dist && objdump -d --start-address=0x525700 --stop-address=0x525840 whitespace_compiler 2>/dev/null | sed -n '5,200p'
+[34] run_command cd /home/ctfplayer/ctf_files/dist && objdump -d --start-address=0xadcfc0 --stop-address=0xadd060 whitespace_compiler 2>/dev/null | sed -n '5,80p'
+[35] run_command cd /home/ctfplayer/ctf_files/dist && objdump -d --start-address=0xadcf40 --stop-address=0xadcfca whitespace_compiler 2>/dev/null | sed -n '5,60p'
+[36] create_file {"content": "#!/usr/bin/env python3\n\"\"\"Interpreter for the custom whitespace VM found in dist/whitespace_compiler.\n\nSemantics (reversed from whitespace_compiler/vm.(*VM).Execute):\n  0x09 (TAB)   : push 0 onto the stack\n  0x0A (LF)    : push top of stack onto output rune list (copy)\n  0x0D (CR)    : XOR top of stack with popped value (a = stack.pop() ^ stack.top())\n  0x20 (SPACE) : increment top of stack\n  0xA0 (NBSP)  : pop (discard top of stack)\nEverything else is ignored.\n\"\"\"\nimport sys\n\ndef run(prog, verbose=False, maxsteps=10_000_000, progname='prog'):\n    stack = []\n    output = []\n    steps = 0\n    for ch in prog:\n        steps += 1\n        if steps > maxsteps:\n            raise RuntimeError('step limit exceeded')\n        c = ord(ch) if isinstance(ch, str) else ch\n        if c == 0x09:      # TAB: push 0\n            stack.append(0)\n        elif c == 0x0A:    # LF: emit (copy) top of stack to output\n            if not stack:\n                raise RuntimeError('stack underflow on LF')\n            output.append(stack[-1])\n        elif c == 0x0D:    # CR: xor top with popped value\n            if len(stack) < 2:\n                raise RuntimeError('stack underflow on CR')\n            top = stack[-1]\n            popped = stack.pop()\n            stack[-1] = top ^ popped\n        elif c == 0x20:    # SPACE: increment top\n            if not stack:\n                raise RuntimeError('stack underflow on SPACE')\n            stack[-1] += 1\n        elif c == 0xA0:    # NBSP: pop\n            if stack:\n                stack.pop()\n        # else: ignore\n    return output, stack\n\ndef to_text(output):\n    return ''.join(chr(v) for v in output)\n\nif __name__ == '__main__':\n    path = sys.argv[1]\n    raw = open(path, 'rb').read()\n    # replicate lexer.CleanAndParse: keep only 0x09,0x0A,0x0D,0x20,0xA0\n    prog = [b for b in raw if b in (0x09, 0x0A, 0x0D, 0x20, 0xA0)]\n    out, stack = run(prog)\n    print('output runes:', out)\n    print('output text :', repr(to_text(out)))\n    print('final stack :', stack)\n", "path": "/home/ctfplayer/workspace/ws_interp.py"}
+[37] run_command cd /home/ctfplayer/workspace && python3 -c "
+prog = '\t' + ' '*0x48 + chr(0x0A)
+open('t1.ws','wb').write(prog.encode('utf-8'))
+prog2 = '\t' + ' '*0x48 + chr(0x0A) + '\t' + ' '*0x48 + chr(0x0A) + chr(0x0D) + chr(0x0A) + chr(0xA0)
+open('t2.ws','wb').write(prog2.encode('utf-8'))
+" && python3 ws_interp.py t1.ws && python3 ws_interp.py t2.ws
+[38] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+# XOR-chain builder: each CR XORs top with popped value.
+# Sequence: TAB (push 0) ... CR ... -> stack becomes [x1, x0^x1]
+def build(text):
+    prog = []
+    prev = 0
+    for ch in text:
+        v = ord(ch)
+        prog.append('\t' + ' '*v)          # push 0, increment v times
+        if prev:
+            prog.append('\t' + ' '*prev + '\r')  # push prev, xor
+        prog.append('\n')                   # output top
+        prog.append('\xa0\xa0')             # pop twice
+        prev = v
+    return ''.join(prog)
+
+s = "Hello, World!"
+open('t3.ws','w').write(build(s))
+EOF
+python3 ws_interp.py t3.ws
+[39] run_command cd /home/ctfplayer/ctf_files/dist && objdump -d --start-address=0x525c2b --stop-address=0x525cf0 whitespace_compiler 2>/dev/null | sed -n '5,50p'
+[40] run_command cd /home/ctfplayer/ctf_files/dist && objdump -d whitespace_compiler 2>/dev/null | grep -n "call.*525840" | head -10
+[41] run_command cd /home/ctfplayer/ctf_files/dist && objdump -d --start-address=0xadc520 --stop-address=0xadc5a5 whitespace_compiler 2>/dev/null | sed -n '5,60p'
+[42] run_command cd /home/ctfplayer/ctf_files/dist && objdump -d --start-address=0xadc5a5 --stop-address=0xadc6c0 whitespace_compiler 2>/dev/null | sed -n '5,90p'
+[43] run_command cd /home/ctfplayer/ctf_files/dist && python3 -c "
+f=open('whitespace_compiler','rb')
+data=f.read()
+def rd(vaddr,ln):
+    off = vaddr - 0xb67000 + 0x767000
+    f.seek(off); return f.read(ln)
+print('ce63dc (0x14):', rd(0xce63dc,0x14))
+"
+[43] run_command cd /home/ctfplayer/ctf_files/dist && objdump -d --start-address=0xadc360 --stop-address=0xadc520 whitespace_compiler 2>/dev/null | sed -n '5,120p'
+[44] run_command cd /home/ctfplayer/ctf_files/dist && objdump -d --start-address=0xadc6c0 --stop-address=0xadcba0 whitespace_compiler 2>/dev/null | sed -n '5,130p'
+[45] run_command cd /home/ctfplayer/ctf_files/dist && objdump -d --start-address=0xadc8e0 --stop-address=0xadcba0 whitespace_compiler 2>/dev/null | grep -E "call|lea .*rip" | head -50
+[46] run_command cd /home/ctfplayer/ctf_files/dist && objdump -d --start-address=0xadc8e0 --stop-address=0xadcba0 whitespace_compiler 2>/dev/null | sed -n '/adc8e7/,/adc9d0/p' | head -70
+[47] run_command cd /home/ctfplayer/ctf_files/dist && objdump -d --start-address=0xadc8e0 --stop-address=0xadc9d0 whitespace_compiler 2>/dev/null | tail -60
+[48] check_hints {}
+[48] run_command cd /home/ctfplayer/ctf_files/dist && strings -n 6 whitespace_compiler | grep -iE "csaw|flag|congrat|winner|you (win|lose|died)" | head -20
+[49] run_command cd /home/ctfplayer/ctf_files/dist && python3 - <<'EOF'
+import struct
+data=open('whitespace_compiler','rb').read()
+off=0xa3a4e0
+nfunc, nfiles = struct.unpack('<QQ', data[off+8:off+24])
+textStart, funcnameOff, cuOff, filetabOff, pctabOff, pclnOff = struct.unpack('<6Q', data[off+24:off+24+48])
+base=off; ftab = base + pclnOff
+names=[]
+for i in range(nfunc):
+    entryoff, funcoff = struct.unpack('<II', data[ftab+i*8: ftab+i*8+8])
+    fo = ftab + funcoff
+    nameoff = struct.unpack('<i', data[fo+4:fo+8])[0]
+    nstart = base + funcnameOff + nameoff
+    j = data.find(b'\x00', nstart, nstart+400)
+    if j<0: continue
+    names.append((textStart+entryoff, data[nstart:j].decode('utf-8','replace')))
+# find index of main.runSpaceInvaders
+targets = {e:n for e,n in names if n.startswith('main.')}
+# print file table entries for main package: use cuOffset / filetab
+# simpler: search filetab for filenames containing 'whitespace_compiler' or 'main.go'
+ft = base + filetabOff
+# filetab format 1.20: 4-byte offsets list terminated by 0? Actually filetab is a list of uint32 offsets into cutab? Let's just scan for strings in the funcname/file region
+# print strings around filetab region
+import re
+region = data[base+filetabOff: base+filetabOff+0x20000]
+for m in re.finditer(rb'[ -~]{4,80}', region[:0x2000]):
+    print(hex(m.start()), m.group()[:80])
+EOF
+[50] run_command cd /home/ctfplayer/ctf_files/dist && python3 - <<'EOF'
+import re
+data=open('whitespace_compiler','rb').read()
+for m in re.finditer(rb'[ -~]{4,120}', data):
+    s = m.group()
+    if b'.go' in s and (b'/' in s) and b'usr/lib' not in s:
+        print(hex(m.start()), s[:120])
+EOF
+[51] run_command cd /home/ctfplayer/ctf_files/dist && objdump -d --start-address=0xadc220 --stop-address=0xadc300 whitespace_compiler 2>/dev/null | sed -n '5,70p'
+[52] run_command cd /home/ctfplayer/ctf_files/dist && objdump -d --start-address=0x525840 --stop-address=0x525c30 whitespace_compiler 2>/dev/null | sed -n '5,300p'
+[52] run_command cd /home/ctfplayer/ctf_files/dist && python3 - <<'EOF'
+data=open('whitespace_compiler','rb').read()
+WS = {0x09,0x0A,0x0D,0x20,0xA0}
+# find runs of whitespace-ish bytes >= 64 bytes
+runs=[]
+i=0
+n=len(data)
+while i<n:
+    if data[i] in WS:
+        j=i
+        while j<n and data[j] in WS:
+            j+=1
+        if j-i>=64:
+            runs.append((i,j-i))
+        i=j
+    else:
+        i+=1
+print('num runs >=64:', len(runs))
+for off,ln in runs[:40]:
+    print(hex(off), ln)
+EOF
+[54] run_command cd /home/ctfplayer/ctf_files/dist && objdump -d --start-address=0x525840 --stop-address=0x525c60 whitespace_compiler > /home/ctfplayer/workspace/exec.asm 2>/dev/null; wc -l /home/ctfplayer/workspace/exec.asm; sed -n '5,120p' /home/ctfplayer/workspace/exec.asm
+[54] run_command cd /home/ctfplayer/ctf_files/dist && objdump -d --start-address=0xadc360 --stop-address=0xadc6c0 whitespace_compiler > /home/ctfplayer/workspace/showend.asm 2>/dev/null; wc -l /home/ctfplayer/workspace/showend.asm; grep -nE "lea .*rip|call " /home/ctfplayer/workspace/showend.asm | head -60
+[55] run_command cd /home/ctfplayer/ctf_files/dist && objdump -d whitespace_compiler 2>/dev/null | grep -nE "ce468b|cd69a1|cd7901" | head -20
+[55] run_command cd /home/ctfplayer/ctf_files/dist && objdump -d --start-address=0xadc6c0 --stop-address=0xadcba0 whitespace_compiler 2>/dev/null | grep -nE "call|lea .*rip" | head -80
+[56] run_command cd /home/ctfplayer/ctf_files/dist && objdump -d --start-address=0xadc360 --stop-address=0xadc6c0 whitespace_compiler 2>/dev/null | sed -n '5,220p'
+[57] run_command sed -n '120,262p' /home/ctfplayer/workspace/exec.asm
+[58] create_file {"path": "/home/ctfplayer/workspace/ws_interp.py", "content": "#!/usr/bin/env python3\n\"\"\"Interpreter for the custom whitespace VM in dist/whitespace_compiler.\n\nSemantics (reversed from whitespace_compiler/vm.(*VM).Execute @ 0x525840):\n  0x09 (TAB)   : push 0 onto the stack\n  0x20 (SPACE) : increment top of stack\n  0x0A (LF)    : append copy of top of stack to output runes (stack unchanged)\n  0x0D (CR)    : XOR top of stack with popped value:  top ^= pop()\n  0xA0 (NBSP)  : pop (discard top of stack)\nEverything else is ignored.  (Also: time.Sleep(10s) per char + a per-100k\nprogress print; we skip both.)\n\nCleanAndParse (lexer) filters the file to exactly these 5 byte values.\n\"\"\"\nimport sys\n\nWS = (0x09, 0x0A, 0x0D, 0x20, 0xA0)\n\ndef run(prog, maxsteps=200_000_000):\n    stack = []\n    output = []\n    steps = 0\n    for b in prog:\n        steps += 1\n        if steps > maxsteps:\n            raise RuntimeError('step limit exceeded')\n        if b == 0x09:      # TAB: push 0\n            stack.append(0)\n        elif b == 0x0A:    # LF: emit copy of top\n            if not stack:\n                raise RuntimeError('stack underflow on LF')\n            output.append(stack[-1])\n        elif b == 0x0D:    # CR: top ^= pop()\n            if len(stack) < 2:\n                raise RuntimeError('stack underflow on CR')\n            top = stack[-1]\n            popped = stack.pop()\n            stack[-1] = top ^ popped\n        elif b == 0x20:    # SPACE: increment top\n            if not stack:\n                raise RuntimeError('stack underflow on SPACE')\n            stack[-1] += 1\n        elif b == 0xA0:    # NBSP: pop\n            if stack:\n                stack.pop()\n    return output, stack\n\ndef to_text(output):\n    return ''.join(chr(v) for v in output)\n\nif __name__ == '__main__':\n    path = sys.argv[1]\n    raw = open(path, 'rb').read()\n    prog = [b for b in raw if b in WS]\n    out, stack = run(prog)\n    print('output runes:', out)\n    print('output text :', repr(to_text(out)))\n    print('final stack :', stack)\n"}
+[58] run_command cd /home/ctfplayer/ctf_files/dist && python3 - <<'EOF'
+import struct
+data=open('whitespace_compiler','rb').read()
+off=0xa3a4e0
+nfunc, nfiles = struct.unpack('<QQ', data[off+8:off+24])
+textStart, funcnameOff, cuOff, filetabOff, pctabOff, pclnOff = struct.unpack('<6Q', data[off+24:off+24+48])
+base=off; ftab = base + pclnOff
+names=[]
+for i in range(nfunc):
+    entryoff, funcoff = struct.unpack('<II', data[ftab+i*8: ftab+i*8+8])
+    fo = ftab + funcoff
+    nameoff = struct.unpack('<i', data[fo+4:fo+8])[0]
+    nstart = base + funcnameOff + nameoff
+    j = data.find(b'\x00', nstart, nstart+400)
+    if j<0: continue
+    names.append((textStart+entryoff, data[nstart:j].decode('utf-8','replace')))
+# show funcs around main.* in file order
+for k,(e,n) in enumerate(names):
+    if n.startswith('main.'):
+        # print neighbours
+        for kk in range(max(0,k-2), min(len(names), k+3)):
+            print(hex(names[kk][0]), names[kk][1])
+        print('---')
+EOF
+[59] run_command cd /home/ctfplayer/ctf_files/dist && objdump -d --start-address=0xadcbe0 --stop-address=0xadce00 whitespace_compiler 2>/dev/null | sed -n '5,80p'
+[60] run_command cd /home/ctfplayer/ctf_files/dist && python3 -c "
+f=open('whitespace_compiler','rb')
+data=f.read()
+def rd(vaddr,ln):
+    off = vaddr - 0xb67000 + 0x767000
+    f.seek(off); return f.read(ln)
+print('ce9cfb:', rd(0xce9cfb,0x30))
+"
+[60] run_command cd /home/ctfplayer/ctf_files/dist && objdump -d --start-address=0xadcbe0 --stop-address=0xadce00 whitespace_compiler 2>/dev/null | grep -E "call|lea .*rip" | head -40
+[61] run_command cd /home/ctfplayer/ctf_files/dist && objdump -d --start-address=0xadcba0 --stop-address=0xadcbe0 whitespace_compiler 2>/dev/null | sed -n '5,40p'
+[62] run_command cd /home/ctfplayer/ctf_files/dist && objdump -d --start-address=0xadc6c0 --stop-address=0xadcba0 whitespace_compiler > /home/ctfplayer/workspace/func3.asm 2>/dev/null; sed -n '1,200p' /home/ctfplayer/workspace/func3.asm
+[63] run_command sed -n '20,140p' /home/ctfplayer/workspace/func3.asm
+[64] get_findings {}
+[64] run_command cd /home/ctfplayer/ctf_files/dist && readelf --debug-dump=info whitespace_compiler 2>/dev/null | grep -m 40 -B2 -A6 "whitespace_compiler"
+[65] run_command cd /home/ctfplayer/ctf_files/dist && readelf --debug-dump=info whitespace_compiler > /home/ctfplayer/workspace/dwarf.txt 2>/dev/null; wc -l /home/ctfplayer/workspace/dwarf.txt; grep -n "whitespace_compiler" /home/ctfplayer/workspace/dwarf.txt | head -40
+[66] run_command sed -n '277790,277900p' /home/ctfplayer/workspace/dwarf.txt
+[66] run_command sed -n '593330,593470p' /home/ctfplayer/workspace/dwarf.txt
+[67] run_command sed -n '277795,277840p' /home/ctfplayer/workspace/dwarf.txt
+[67] run_command grep -n "main\." /home/ctfplayer/workspace/dwarf.txt | head -60
+[68] run_command sed -n '277798,277840p' /home/ctfplayer/workspace/dwarf.txt
+[68] run_command sed -n '54760,55180p' /home/ctfplayer/workspace/dwarf.txt
+[69] run_command grep -n "showEndScreen\|runSpaceInvaders\|main.main\|loadAndResizeImage\|main.max\|main.min\|reverseUnique" /home/ctfplayer/workspace/dwarf.txt | head -30
+[69] run_command sed -n '277795,277830p' /home/ctfplayer/workspace/dwarf.txt
+[70] run_command sed -n '55217,55560p' /home/ctfplayer/workspace/dwarf.txt
+[71] run_command sed -n '55580,55760p' /home/ctfplayer/workspace/dwarf.txt
+[72] run_command cd /home/ctfplayer/ctf_files/dist && objdump -d -l --start-address=0xadc6c0 --stop-address=0xadcba0 whitespace_compiler 2>/dev/null | grep -E "^/|ws_compiler|\.go:" | sort | uniq -c | sort -rn | head -30
+finished: aborted reason=aborted rounds=72 cost=$0.1333 transcript=C:\Users\Dingus\csaw26_llm_ctf\logs\evals\20261106-232811__eval\13__whitespace_compiler\lane-1\20261107-001555__reverse_whitespace_compiler_main_z-ai_glm-5_3-flash.json
