@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Command-line entry point for the csaw26 solver."""
+"""Command-line entry point for the antihydra solver."""
 
 from __future__ import annotations
 
@@ -8,20 +8,20 @@ import os
 import sys
 from pathlib import Path
 
-from csaw26.agent import Agent
-from csaw26.blackboard import Blackboard
-from csaw26.challenge import ChallengeError, discover, resolve
-from csaw26.compaction import CompactionConfig
-from csaw26.env import load_dotenv
-from csaw26.llm import (
+from antihydra.agent import Agent
+from antihydra.blackboard import Blackboard
+from antihydra.challenge import ChallengeError, discover, resolve
+from antihydra.compaction import CompactionConfig
+from antihydra.env import load_dotenv
+from antihydra.llm import (
     REASONING_EFFORTS,
     LLMError,
-    OpenRouterLLM,
     load_catalog,
     normalize_model,
 )
-from csaw26.prompts import initial_prompt, system_prompt
-from csaw26.sandbox import (
+from antihydra.prompts import initial_prompt, system_prompt
+from antihydra.runtime import Runtime
+from antihydra.sandbox import (
     LEASE_LABEL,
     Sandbox,
     SandboxError,
@@ -30,15 +30,15 @@ from csaw26.sandbox import (
     ensure_network,
     find_docker,
 )
-from csaw26.stalls import StallConfig
-from csaw26.tools import CostLedger, build_main_tools
+from antihydra.stalls import StallConfig
+from antihydra.tools import CostLedger, build_main_tools
 
 DEFAULT_ROOT = "competition/2025"
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="csaw26-solve",
+        prog="antihydra-solve",
         description="Independent LLM CTF solver for CSAW/NYU-style challenges",
     )
     parser.add_argument(
@@ -88,7 +88,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=os.environ.get("OPENROUTER_API_KEY"),
         help="OpenRouter API key (or OPENROUTER_API_KEY)",
     )
-    parser.add_argument("--image", default="ctfenv:csaw26", help="sandbox image")
+    parser.add_argument("--image", default="ctfenv:antihydra", help="sandbox image")
     parser.add_argument("--platform", default="linux/amd64", help="sandbox platform")
     parser.add_argument(
         "--network", default="ctfnet", help="docker network for the sandbox"
@@ -245,6 +245,7 @@ def main(argv: list[str] | None = None) -> int:
             print(initial_prompt(challenge))
             return 0
 
+        challenge.require_delivered_files()
         docker = find_docker()
         daemon_version(docker)
         ensure_network(docker, args.network)
@@ -253,6 +254,9 @@ def main(argv: list[str] | None = None) -> int:
         if not args.no_service and not args.dry_run and challenge.compose_file():
             print(f"starting challenge service ({challenge.compose_file()})")
             service = challenge.start_service(docker)
+            target = challenge.discover_local_target(docker)
+            if target:
+                print(f"service reachable from the sandbox at {target}")
 
         sandbox = Sandbox(
             image=args.image,
@@ -300,26 +304,20 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 return 2
 
-            catalog = load_catalog()
-            llm = OpenRouterLLM(
+            runtime = Runtime(args.api_key)
+            llm = runtime.llm(
                 args.model,
-                args.api_key,
+                args.reasoning_effort,
                 temperature=args.temperature,
                 max_tokens=args.max_tokens,
-                catalog=catalog,
-                extra_body={"reasoning": {"effort": args.reasoning_effort}},
             )
             blackboard = Blackboard(sandbox)
             ledger = CostLedger()
-            compaction_llm = None
-            if args.compact_model:
-                compaction_llm = OpenRouterLLM(
-                    args.compact_model,
-                    args.api_key,
-                    temperature=0.0,
-                    max_tokens=1200,
-                    catalog=catalog,
-                )
+            compaction_llm = (
+                runtime.compaction_llm(args.compact_model)
+                if args.compact_model
+                else None
+            )
             agent = Agent(
                 challenge,
                 sandbox,

@@ -8,7 +8,7 @@ OUT="${2:-/tmp/decompiled.c}"
 PROJECT_DIR="${TMPDIR:-/tmp}/ghidra-project"
 
 rm -rf "$PROJECT_DIR"
-/opt/ghidra/support/analyzeHeadless "$PROJECT_DIR" csaw26 \
+/opt/ghidra/support/analyzeHeadless "$PROJECT_DIR" antihydra \
   -import "$(realpath "$BIN")" \
   -scriptPath /opt/ghidra/scripts \
   -postScript DecompileAll.java "$OUT" \

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the csaw26 sandbox image and ensure the docker network exists.
+# Build the antihydra sandbox image and ensure the docker network exists.
 #
 # Usage: bash docker/build_sandbox.sh [image-tag]
 #
@@ -7,7 +7,7 @@
 #   EXTRA_BUILD_ARGS="--build-arg WITH_HEAVY=0" bash docker/build_sandbox.sh
 set -euo pipefail
 
-IMAGE="${1:-ctfenv:csaw26}"
+IMAGE="${1:-ctfenv:antihydra}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 docker build -t "$IMAGE" ${EXTRA_BUILD_ARGS:-} "$HERE/sandbox"

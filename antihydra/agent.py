@@ -227,7 +227,7 @@ class Agent:
                             call.name, call.arguments, context
                         )
                         self._say(
-                            f"{self._prefix()}[{rounds:02d}] {call.name} {self._preview(call)}"
+                            f"{self._prefix()}[{rounds:02d}] {call.name} {self._describe_call(call)}"
                         )
                         transcript.event(
                             "tool_call",
@@ -292,6 +292,15 @@ class Agent:
             reason = "error"
             error = str(exc)
             transcript.event("error", message=str(exc))
+        except Exception as exc:  # noqa: BLE001 - keep the trace and the accounting
+            # A forced shutdown kills the sandbox mid-round: that is an abort, not
+            # a solver failure, and the transcript must still be written.
+            if self.should_stop is not None and self.should_stop():
+                reason = "aborted"
+            else:
+                reason = "error"
+                error = f"{type(exc).__name__}: {exc}"
+            transcript.event("error", message=f"{type(exc).__name__}: {exc}")
 
         transcript.event(
             "finished",
@@ -521,7 +530,7 @@ class Agent:
             emit=self.emit,
             should_stop=self.should_stop,
         )
-        self._say(f"{self._prefix()}-> {label} starts: {task.strip()[:100]}")
+        self._say(f"{self._prefix()}-> {label} starts: {task.strip()}")
         result = worker.run()
 
         summary = worker_state.summary or f"(worker ended: {result.reason}, no summary)"
@@ -608,17 +617,16 @@ class Agent:
         prepared.reverse()
         return prepared
 
-    def _preview(self, call: Any) -> str:
+    def _describe_call(self, call: Any) -> str:
+        """Full tool-call rendering; run.log keeps it verbatim, the console trims."""
         if call.name == "run_command" and call.arguments:
-            command = str(call.arguments.get("command", ""))
-            return command.replace("\n", " ")[:110]
+            return str(call.arguments.get("command", ""))
         if call.name in {"spawn_subtask", "finish_task"} and call.arguments:
-            text = str(
+            return str(
                 call.arguments.get("task") or call.arguments.get("summary") or ""
             )
-            return text.replace("\n", " ")[:110]
         if call.arguments is not None:
-            return json.dumps(call.arguments)[:110]
+            return json.dumps(call.arguments)
         return ""
 
     def _prefix(self) -> str:

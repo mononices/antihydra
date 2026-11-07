@@ -173,7 +173,7 @@ class OpenRouterLLM:
         return {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
-            "X-Title": "csaw26-solver",
+            "X-Title": "antihydra-solver",
         }
 
     def _post(self, payload: dict[str, Any]) -> dict[str, Any]:

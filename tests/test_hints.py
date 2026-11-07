@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import unittest
 
-from csaw26.hints import HintBus
+from antihydra.hints import HintBus
 
 
 class HintBusTests(unittest.TestCase):

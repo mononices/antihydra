@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import json
-import subprocess
 import threading
 import time
+import traceback
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -29,6 +29,7 @@ from .sandbox import (
     daemon_version,
     ensure_network,
     find_docker,
+    warn_memory,
 )
 from .stalls import StallConfig
 from .tools import CostLedger, build_main_tools
@@ -36,12 +37,35 @@ from .tools import CostLedger, build_main_tools
 POLL_SECONDS = 0.5
 HEARTBEAT_SECONDS = 30.0
 ABORT_GRACE_SECONDS = 15.0
-MEMORY_UNITS = {"k": 1024, "m": 1024**2, "g": 1024**3, "t": 1024**4}
+CONSOLE_LINE_LIMIT = 200
 FALLBACK_TEMPERATURE = 0.7
 FALLBACK_REASONING_EFFORT = "max"
 FALLBACK_MAX_COST = 4.0
 FALLBACK_MAX_ROUNDS = 200
 MIN_REVIEW_GAP_SECONDS = 5.0
+
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _in_repo(filename: str) -> bool:
+    try:
+        return Path(filename).resolve().is_relative_to(_REPO_ROOT)
+    except (OSError, ValueError):
+        return False
+
+
+def _describe_exc(exc: BaseException) -> str:
+    """Error text with the deepest in-repo source location for quick triage."""
+    frames = traceback.extract_tb(exc.__traceback__)
+    inside = [frame for frame in frames if _in_repo(frame.filename)]
+    frame = (inside or frames or [None])[-1]
+    if frame is None:
+        return f"{type(exc).__name__}: {exc}"
+    return (
+        f"{type(exc).__name__}: {exc} "
+        f"(at {Path(frame.filename).name}:{frame.lineno} in {frame.name})"
+    )
 
 
 @dataclass
@@ -69,6 +93,7 @@ class LaneResult:
     status: str
     cost: float = 0.0
     rounds: int = 0
+    flag: str | None = None
     transcript: str | None = None
     error: str | None = None
 
@@ -80,6 +105,7 @@ class LaneResult:
             "status": self.status,
             "cost": round(self.cost, 6),
             "rounds": self.rounds,
+            "flag": self.flag,
             "transcript": self.transcript,
             "error": self.error,
         }
@@ -121,7 +147,7 @@ class LaneRunner(Protocol):
 
 
 def lane_label(race_id: str, spec: LaneSpec) -> str:
-    return f"csaw26.lane.{race_id}.{spec.id}"
+    return f"antihydra.lane.{race_id}.{spec.id}"
 
 
 def load_lane_specs(
@@ -245,7 +271,7 @@ class Lane:
         llm: OpenRouterLLM,
         compaction_llm: OpenRouterLLM | None = None,
         docker: str | None = None,
-        image: str = "ctfenv:csaw26",
+        image: str = "ctfenv:antihydra",
         network: str = "ctfnet",
         memory: str = "4g",
         platform: str = "linux/amd64",
@@ -352,6 +378,7 @@ class Lane:
                 status=status,
                 cost=round(ledger.total, 6),
                 rounds=result.rounds,
+                flag=result.flag,
                 transcript=(
                     str(result.transcript_path) if result.transcript_path else None
                 ),
@@ -359,20 +386,41 @@ class Lane:
             )
         except Exception as exc:  # noqa: BLE001 - reported as a lane failure
             self.status = "error"
+            self._save_error_trace()
             return LaneResult(
-                spec=self.spec, status="error", error=f"{type(exc).__name__}: {exc}"
+                spec=self.spec,
+                status="error",
+                cost=round(ledger.total, 6),
+                rounds=self._rounds,
+                error=_describe_exc(exc),
             )
         finally:
-            sandbox.stop()
+            try:
+                sandbox.stop()
+            except Exception:  # noqa: BLE001 - cleanup must not mask the lane result
+                pass
             self._sandbox = None
+
+    def _save_error_trace(self) -> None:
+        try:
+            self.log_dir.mkdir(parents=True, exist_ok=True)
+            (self.log_dir / "error.txt").write_text(
+                traceback.format_exc(), encoding="utf-8"
+            )
+        except OSError:
+            pass
 
     def abort(self) -> None:
         self._stop.set()
 
     def force_stop(self) -> None:
         self._stop.set()
-        if self._sandbox is not None:
-            self._sandbox.stop()
+        sandbox = self._sandbox
+        if sandbox is not None:
+            try:
+                sandbox.stop()
+            except Exception:  # noqa: BLE001 - force stop is best effort
+                pass
 
     def deliver(self, text: str) -> None:
         with self._inbox_lock:
@@ -464,6 +512,8 @@ class RaceCoordinator:
         max_minutes: float | None = None,
         poll_seconds: float = POLL_SECONDS,
         quiet: bool = False,
+        prefix: str = "",
+        stop_event: threading.Event | None = None,
     ) -> None:
         self.challenge = challenge
         self.specs = list(specs)
@@ -477,6 +527,8 @@ class RaceCoordinator:
         self.max_minutes = max_minutes
         self.poll_seconds = poll_seconds
         self.quiet = quiet
+        self.prefix = prefix
+        self.stop_event = stop_event
         self.hints = HintBus()
         self.overseer = overseer
         self._overseer_log: list[dict] = []
@@ -492,7 +544,7 @@ class RaceCoordinator:
         if self.quiet:
             return
         with self._lock:
-            print(message, flush=True)
+            print(f"{self.prefix}{message}", flush=True)
 
     def _lane_output(self, spec: LaneSpec, line: str) -> None:
         with self._lock:
@@ -504,20 +556,43 @@ class RaceCoordinator:
                 except (OSError, ValueError):
                     pass
             if self.follow:
-                print(f"[{spec.label} {spec.short_model}] {line}", flush=True)
+                console = " ".join(line.split())
+                if len(console) > CONSOLE_LINE_LIMIT:
+                    console = console[:CONSOLE_LINE_LIMIT] + " ..."
+                print(
+                    f"{self.prefix}[{spec.label} {spec.short_model}] {console}",
+                    flush=True,
+                )
+
+    def _write_error_trace(self, spec: LaneSpec, text: str) -> None:
+        try:
+            path = self.race_dir / spec.label / "error.txt"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8")
+        except OSError:
+            pass
 
     def _run_lane(self, lane: LaneRunner) -> None:
         try:
             result = lane.run()
         except Exception as exc:  # noqa: BLE001 - reported as a lane failure
+            self._write_error_trace(lane.spec, traceback.format_exc())
+            ledger = getattr(lane, "ledger", None)
             result = LaneResult(
-                spec=lane.spec, status="error", error=f"{type(exc).__name__}: {exc}"
+                spec=lane.spec,
+                status="error",
+                cost=round(ledger.total, 6) if ledger is not None else 0.0,
+                rounds=int(getattr(lane, "_rounds", 0) or 0),
+                error=_describe_exc(exc),
             )
         with self._lock:
             self._results[lane.spec.id] = result
+        detail = ""
+        if result.error:
+            detail = " :: " + " ".join(str(result.error).split())[:200]
         self._say(
             f"[race] {lane.spec.label} ({lane.spec.short_model}) {result.status} "
-            f"cost=${result.cost:.3f} rounds={result.rounds}"
+            f"cost=${result.cost:.3f} rounds={result.rounds}{detail}"
         )
 
     def run(self) -> dict:
@@ -533,12 +608,15 @@ class RaceCoordinator:
                 self.docker = find_docker()
             daemon_version(self.docker)
             ensure_network(self.docker, self.network)
-            _warn_memory(self.docker, self.memory, len(self.specs), self._say)
+            warn_memory(self.docker, self.memory, len(self.specs), self._say)
             if self.challenge.compose_file():
                 self._say(
                     f"starting challenge service ({self.challenge.compose_file()})"
                 )
                 service = self.challenge.start_service(self.docker)
+                target = self.challenge.discover_local_target(self.docker)
+                if target:
+                    self._say(f"service reachable from the sandbox at {target}")
 
         threads: list[threading.Thread] = []
         interrupted = False
@@ -568,11 +646,12 @@ class RaceCoordinator:
                 try:
                     lane = self.lane_factory(spec, lane_dir, emit, self.hints)
                 except Exception as exc:  # noqa: BLE001 - reported as a lane failure
+                    self._write_error_trace(spec, traceback.format_exc())
                     with self._lock:
                         self._results[spec.id] = LaneResult(
                             spec=spec,
                             status="error",
-                            error=f"{type(exc).__name__}: {exc}",
+                            error=_describe_exc(exc),
                         )
                     self._say(f"[race] {spec.label} failed to start: {exc}")
                     continue
@@ -601,6 +680,10 @@ class RaceCoordinator:
                         lane.abort()
                     break
                 if len(finished) >= len(self.specs):
+                    break
+                if self.stop_event is not None and self.stop_event.is_set():
+                    interrupted = True
+                    self._say("[race] stopped by coordinator")
                     break
                 now = time.time()
                 if now - last_heartbeat >= HEARTBEAT_SECONDS:
@@ -654,6 +737,9 @@ class RaceCoordinator:
         ]
         total_cost = sum(result.cost for result in ordered)
         elapsed = time.time() - started
+        flag = next((result.flag for result in ordered if result.flag), None)
+        if flag:
+            (self.race_dir / "flag.txt").write_text(str(flag) + "\n", encoding="utf-8")
         overseer_report: dict = {"enabled": self.overseer is not None}
         if self.overseer is not None:
             overseer_report.update(
@@ -671,6 +757,7 @@ class RaceCoordinator:
             "solved": winner is not None,
             "solved_by": winner.id if winner else None,
             "solved_by_model": winner.model if winner else None,
+            "flag": flag,
             "k": len(self.specs),
             "pass_at_k": 1 if winner else 0,
             "interrupted": interrupted,
@@ -818,35 +905,3 @@ class RaceCoordinator:
             }
         )
         self._say(f"[overseer] -> {target}: {text[:140]}")
-
-
-def _parse_memory(value: str) -> int | None:
-    text = value.strip().lower()
-    if text.isdigit():
-        return int(text)
-    if text and text[-1] in MEMORY_UNITS:
-        try:
-            return int(float(text[:-1]) * MEMORY_UNITS[text[-1]])
-        except ValueError:
-            return None
-    return None
-
-
-def _warn_memory(
-    docker: str, memory: str, lanes: int, say: Callable[[str], None]
-) -> None:
-    per_lane = _parse_memory(memory)
-    if per_lane is None:
-        return
-    probe = subprocess.run(
-        [docker, "info", "--format", "{{.MemTotal}}"], capture_output=True
-    )
-    try:
-        total = int(probe.stdout.decode("utf-8", "replace").strip())
-    except ValueError:
-        return
-    if total and lanes * per_lane > total * 0.9:
-        say(
-            f"[race] warning: {lanes} lanes x {memory} exceeds the Docker VM's "
-            f"{total / 1024**3:.1f} GiB; lower --lane-memory or use fewer lanes"
-        )

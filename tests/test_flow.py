@@ -11,15 +11,15 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from csaw26.agent import Agent
-from csaw26.blackboard import Blackboard
-from csaw26.challenge import Challenge
-from csaw26.compaction import CompactionConfig, safe_cut_index
-from csaw26.hints import HintBus
-from csaw26.llm import Reply, ToolCallRequest
-from csaw26.sandbox import ExecResult, SandboxError
-from csaw26.stalls import StallConfig, fingerprint
-from csaw26.tools import CostLedger, build_main_tools
+from antihydra.agent import Agent
+from antihydra.blackboard import Blackboard
+from antihydra.challenge import Challenge
+from antihydra.compaction import CompactionConfig, safe_cut_index
+from antihydra.hints import HintBus
+from antihydra.llm import Reply, ToolCallRequest
+from antihydra.sandbox import ExecResult, SandboxError
+from antihydra.stalls import StallConfig, fingerprint
+from antihydra.tools import CostLedger, build_main_tools
 
 
 class FakeSandbox:
@@ -222,6 +222,35 @@ class FlowTests(unittest.TestCase):
                 for message in data["messages"]
             )
         )
+
+    def test_forced_stop_mid_round_is_an_abort_not_an_error(self) -> None:
+        stopped = {"flag": False}
+
+        class DeadSandbox(FakeSandbox):
+            def exec(self, command: str, timeout: float = 300) -> ExecResult:
+                stopped["flag"] = True  # the coordinator force-stopped us mid-round
+                raise SandboxError("sandbox is not running")
+
+        dead = DeadSandbox()
+        agent = Agent(
+            self.challenge,
+            dead,
+            FakeLLM([reply(("run_command", {"command": "ls"}))]),
+            build_main_tools(Blackboard(dead, path="/notes.md")),
+            ledger=self.ledger,
+            blackboard=Blackboard(dead, path="/notes.md"),
+            log_dir=self.root / "logs",
+            quiet=True,
+            should_stop=lambda: stopped["flag"],
+        )
+
+        result = agent.run()
+
+        self.assertEqual(result.reason, "aborted")
+        self.assertIsNone(result.error)
+        self.assertEqual(result.rounds, 1)
+        self.assertAlmostEqual(result.cost, 0.01)
+        self.assertIsNotNone(result.transcript_path)
 
     def test_stall_detector_aborts_run(self) -> None:
         same = ("run_command", {"command": "echo hello"})

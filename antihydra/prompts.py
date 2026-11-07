@@ -54,13 +54,21 @@ assigned you exactly one subtask; complete it and report back.
 
 
 def _sandbox_facts(challenge: Challenge, timeout: float) -> str:
-    target = challenge.target_line()
-    target_block = (
-        f"- Remote service: {target} (reachable from inside the sandbox)\n"
-        if target
-        else ""
-    )
+    target_block = _target_block(challenge, prefix="- ")
     return _SANDBOX_FACTS.format(timeout=timeout, target_block=target_block)
+
+
+def _target_block(challenge: Challenge, *, prefix: str = "") -> str:
+    target = challenge.reachable_target()
+    if target:
+        return f"{prefix}Remote service: {target} (reachable from inside the sandbox)\n"
+    if challenge.is_remote_only():
+        return (
+            f"{prefix}No local service is running for this challenge and the public "
+            f"address ({challenge.target_line()}) is not reachable from the sandbox; "
+            "work from the provided files alone.\n"
+        )
+    return ""
 
 
 def _flag_block(challenge: Challenge) -> str:
@@ -100,8 +108,7 @@ def worker_system_prompt(
 
 def initial_prompt(challenge: Challenge) -> str:
     files = ", ".join(challenge.files) if challenge.files else "none provided"
-    target = challenge.target_line()
-    target_line = f"Remote service: {target}\n" if target else ""
+    target_line = _target_block(challenge)
     return (
         f"Challenge: {challenge.name} ({challenge.category})\n"
         f"{target_line}"

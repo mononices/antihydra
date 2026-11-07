@@ -15,7 +15,7 @@ repositories. It is compatible with their data format (`challenge.json`,
 
 solve.py (host, stdlib only)
 ├── challenge.py ......... challenge.json metadata + compose service (ctfnet)
-├── sandbox.py ........... sandbox container (ctfenv:csaw26, linux/amd64)
+├── sandbox.py ........... sandbox container (ctfenv:antihydra, linux/amd64)
 ├── llm.py ............... OpenRouter chat/tool calls
 └── Agent (main) ......... conversation loop
     ├── tools.py ......... docker exec into the sandbox
@@ -87,6 +87,8 @@ round start
   compile checks, and the fake-sandbox tests in `tests/` are fine to run.
 - Flags: only the `files` list from `challenge.json` is copied into the sandbox;
   never copy flag files. `scripts/audit_dataset.py` verifies this.
+- `competition/` is read-only: never edit, move, or delete dataset files;
+  corrections belong in `overrides.toml`, applied at load time.
 - Lanes and workers solve from the challenge description and files alone.
   Knowledge hints (RAG/overseer, when built) must stay technique-level and must
   never contain flags or direct solutions.
@@ -94,29 +96,33 @@ round start
 ## Layout
 
 ```
-csaw26/                  # solver package (host side uses the stdlib only)
+antihydra/                  # solver package (host side uses the stdlib only)
   challenge.py           # discovery, metadata, compose service lifecycle
   sandbox.py             # docker sandbox lifecycle (docker CLI)
   tools.py               # tool registry, cost ledger, main/worker tool profiles
   blackboard.py          # shared markdown findings board (notes.md in sandbox)
   llm.py                 # OpenRouter chat client + model price catalog
+  runtime.py             # shared model clients + catalog cache
   compaction.py          # summarize old history when the context fills
   stalls.py              # repeated-call stall detection
   agent.py               # agent loop: main agent + fresh-context subtask workers
   racing.py              # Lane / RaceCoordinator classes + roster parsing
   hints.py               # in-process hint bus between racing lanes
   overseer.py            # trigger-driven supervisor that pushes curated hints
+  evaluation.py          # eval harness: run a challenge set, aggregate results
   prompts.py             # system/initial/worker prompts
   transcript.py          # JSON run transcripts
 solve.py                 # CLI entry point for one solve
 race.py                  # CLI entry point for parallel racing
+eval.py                  # CLI entry point for the evaluation harness
 lanes.toml               # modifiable lane roster used by race.py
 docker/sandbox/          # sandbox image (Dockerfile, tools.txt, Ghidra script)
 docker/build_sandbox.sh  # build image + create the ctfnet network
 scripts/audit_dataset.py # flag-leak audit for challenge data
+scripts/show_race.py     # race log viewer
 tests/test_flow.py       # fake-sandbox unit tests (no docker, no network)
-docs/session-notes.md    # decisions, status, runbook, pending work
 competition/2025/        # CSAW 2025 challenge set (crypto, misc, pwn, rev, web)
+overrides.toml           # loader-side corrections for dataset defects
 ```
 
 ## Requirements
@@ -165,7 +171,7 @@ Exit codes: `0` solved, `1` not solved, `2` usage error, `3` runtime error.
 | `--list-models` | OpenRouter models + prices (`--grep`, `--limit`, `--refresh-catalog`) |
 | `--cleanup` | remove orphan sandbox containers |
 | `--model` / `--api-key` | defaults from `OPENROUTER_MODEL` / `OPENROUTER_API_KEY` |
-| `--image` / `--platform` / `--network` / `--memory` | sandbox settings (defaults: `ctfenv:csaw26`, `linux/amd64`, `ctfnet`, `8g`) |
+| `--image` / `--platform` / `--network` / `--memory` | sandbox settings (defaults: `ctfenv:antihydra`, `linux/amd64`, `ctfnet`, `8g`) |
 | `--max-rounds` / `--max-cost` / `--temperature` / `--max-tokens` | model loop limits |
 | `--timeout` | default `run_command` timeout (seconds) |
 | `--no-service` | never start the challenge `docker-compose` service |
@@ -179,7 +185,7 @@ Exit codes: `0` solved, `1` not solved, `2` usage error, `3` runtime error.
 
 1. The challenge is loaded from `challenge.json`; server-backed challenges have
    their compose stack started on `ctfnet`.
-2. A sandbox container (`ctfenv:csaw26`) starts on `ctfnet`; challenge files are
+2. A sandbox container (`ctfenv:antihydra`) starts on `ctfnet`; challenge files are
    copied to `/home/ctfplayer/ctf_files/`.
 3. The agent loop calls the model (OpenRouter) with the tool schemas; tool calls
    execute inside the sandbox (`run_command`, `create_file`, `read_file`,
@@ -231,7 +237,7 @@ python race.py --challenge arm-strong \
   silences the stream. Full output is always in `lane-N/run.log`.
 - Artifacts: `logs/races/<ts>__<challenge>/lane-N/` (`run.log`, `lane.json`,
   transcript) plus `race-summary.json` (per-lane status, cost, rounds,
-  `pass_at_k`, `solved_by`).
+  `pass_at_k`, `solved_by`, `flag`) and `flag.txt` when a lane finds the flag.
 - Rosters: `lanes.toml` (shipped template; used automatically when no
   `--lanes`/`--lanes-file` is given) or a JSON list. Precedence per field:
   lane entry > CLI flag > `[defaults]` > built-in fallback. Fields: `model`,
@@ -239,8 +245,32 @@ python race.py --challenge arm-strong \
   `no_subtasks`.
 - Aborted lanes report their spend from their own ledger (they stop at a round
   boundary); the coordinator force-stops only stragglers.
-- Race sandboxes use per-lane labels (`csaw26.lane.<race>.N`); `solve.py
+- Race sandboxes use per-lane labels (`antihydra.lane.<race>.N`); `solve.py
   --cleanup` only removes the default label, the coordinator cleans its own.
+
+## Evaluation
+
+Run the racing solver across a challenge set and aggregate the results:
+
+```bash
+# whole local set, resumable, 30 min cap per challenge
+python eval.py --max-minutes 30 --max-total-cost 25
+
+# one category with an inline roster
+python eval.py --category pwn --lanes openrouter/anthropic/claude-sonnet-5.5 --max-minutes 45
+```
+
+- Per challenge: `<eval-dir>/<NN>__<challenge>/` holds the race artifacts
+  (`race-summary.json`, `flag.txt` when solved, `lane-N/` logs and transcripts).
+- Aggregates in the eval root: `eval-summary.json` (per-challenge results,
+  per-category breakdown, cost, `pass_at_k` where k = lanes, `lane_solve_rate`),
+  `summary.json` (leaderboard shape: metadata + name to bool), and
+  `traces.jsonl` (one line per lane transcript).
+- `--concurrency N` (default 3) runs N challenges at once; challenges whose
+  compose publishes the same host port (or uses a fixed `container_name`) are
+  serialized automatically. Sandbox memory scales with concurrency x lanes.
+- `--skip-existing` reuses completed race summaries; `--max-total-cost` stops the
+  eval between challenges.
 
 ## Status / roadmap
 
@@ -253,20 +283,18 @@ python race.py --challenge arm-strong \
 - [x] context compaction (old history summarized when the context fills)
 - [x] stall detection (repeated identical calls are nudged, then abort the run)
 - [ ] retrieval service (CTF writeup RAG, hints injected at subtask boundary)
-- [x] racing coordinator (`race.py`: process-fan-out lanes, first flag wins,
-      pass@k summary)
+- [x] racing coordinator (`race.py`: in-process lanes, first flag wins,
+      pass@k summary, `flag.txt` artifact)
+- [x] evaluation harness (`eval.py`: per-challenge races, `eval-summary.json`,
+      leaderboard-shaped `summary.json`, `traces.jsonl`, `--skip-existing`)
 - [x] cross-lane hint bus (`publish_insight` / `check_hints`, in-process; no LLM
       relay yet)
 - [x] per-lane reasoning effort (`--reasoning-effort`, `lanes.toml` field,
       default `max`; compaction override still pending)
 - [x] overseer (trigger reviews, inbox push, one-step trace inspection; RAG
       hint injection still pending)
-- [ ] leaderboard packaging (summary.json + transcript export)
-
-## Session history
-
-- `docs/session-notes.md` — decisions, verification status, runbook, pending work
-- `docs/sessions/` — raw build-session transcript (local only, gitignored)
+- [x] leaderboard packaging (leaderboard-shaped `summary.json` + `traces.jsonl`
+      from `eval.py`; NYU canonical challenge names still manual)
 
 ## Notes
 

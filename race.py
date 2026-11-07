@@ -9,14 +9,15 @@ import sys
 import time
 from pathlib import Path
 
-from csaw26.challenge import ChallengeError, resolve
-from csaw26.compaction import CompactionConfig
-from csaw26.env import load_dotenv
-from csaw26.llm import REASONING_EFFORTS, LLMError, OpenRouterLLM, load_catalog
-from csaw26.overseer import Overseer, OverseerConfig
-from csaw26.racing import Lane, RaceCoordinator, lane_label, load_lane_specs
-from csaw26.sandbox import SandboxError, find_docker
-from csaw26.stalls import StallConfig
+from antihydra.challenge import ChallengeError, resolve
+from antihydra.compaction import CompactionConfig
+from antihydra.env import load_dotenv
+from antihydra.llm import REASONING_EFFORTS, LLMError
+from antihydra.overseer import OverseerConfig
+from antihydra.runtime import Runtime
+from antihydra.racing import Lane, RaceCoordinator, lane_label, load_lane_specs
+from antihydra.sandbox import SandboxError, find_docker
+from antihydra.stalls import StallConfig
 
 DEFAULT_ROOT = "competition/2025"
 REPO_ROOT = Path(__file__).resolve().parent
@@ -24,7 +25,7 @@ REPO_ROOT = Path(__file__).resolve().parent
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="csaw26-race",
+        prog="antihydra-race",
         description="Run several solver lanes against one challenge; first flag wins",
     )
     parser.add_argument(
@@ -67,7 +68,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="disable subtasks in all lanes",
     )
-    parser.add_argument("--image", default="ctfenv:csaw26", help="sandbox image")
+    parser.add_argument("--image", default="ctfenv:antihydra", help="sandbox image")
     parser.add_argument("--platform", default="linux/amd64", help="sandbox platform")
     parser.add_argument("--network", default="ctfnet", help="docker network")
     parser.add_argument("--lane-memory", default="4g", help="memory limit per lane")
@@ -120,6 +121,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="USD budget for overseer calls (default: %(default)s)",
     )
     parser.add_argument(
+        "--overseer-max-calls",
+        type=int,
+        default=25,
+        help="max overseer LLM calls per race (default: %(default)s)",
+    )
+    parser.add_argument(
         "--no-service", action="store_true", help="never start the challenge service"
     )
     parser.add_argument(
@@ -133,6 +140,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         challenge = resolve(args.root, args.challenge)
+        challenge.require_delivered_files()
         lanes_file = args.lanes_file
         if not lanes_file and not args.lanes and (REPO_ROOT / "lanes.toml").is_file():
             lanes_file = REPO_ROOT / "lanes.toml"
@@ -164,25 +172,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 3
 
-    catalog = load_catalog()
-    llms: dict[tuple[str, str], OpenRouterLLM] = {}
-
-    def llm_for(model: str, reasoning_effort: str) -> OpenRouterLLM:
-        key = (model, reasoning_effort)
-        if key not in llms:
-            llms[key] = OpenRouterLLM(
-                model,
-                api_key,
-                catalog=catalog,
-                extra_body={"reasoning": {"effort": reasoning_effort}},
-            )
-        return llms[key]
-
-    compaction_llm = None
-    if compact_model:
-        compaction_llm = OpenRouterLLM(
-            compact_model, api_key, temperature=0.0, max_tokens=1200, catalog=catalog
-        )
+    runtime = Runtime(api_key)
+    compaction_llm = runtime.compaction_llm(compact_model) if compact_model else None
 
     race_dir = (
         Path(args.race_dir) / f"{time.strftime('%Y%m%d-%H%M%S')}__{challenge.name}"
@@ -205,29 +196,23 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
             return 2
-        overseer_llm = OpenRouterLLM(
-            overseer_model,
-            api_key,
-            temperature=0.0,
-            max_tokens=2000,
-            catalog=catalog,
-            extra_body={"reasoning": {"effort": overseer_effort}},
-        )
-        overseer = Overseer(
-            overseer_llm,
+        overseer = runtime.overseer(
             OverseerConfig(
                 model=overseer_model,
                 reasoning_effort=overseer_effort,
                 interval_seconds=args.overseer_interval,
+                max_calls=args.overseer_max_calls,
                 max_cost=args.overseer_max_cost,
-            ),
+            )
         )
 
     def lane_factory(spec, lane_dir, emit, hints):
         return Lane(
             spec,
             challenge,
-            llm=llm_for(spec.model, spec.reasoning_effort),
+            llm=runtime.llm(
+                spec.model, spec.reasoning_effort, temperature=spec.temperature
+            ),
             compaction_llm=compaction_llm,
             docker=docker,
             image=args.image,

@@ -10,15 +10,16 @@ import time
 import unittest
 from pathlib import Path
 
-from csaw26.challenge import Challenge
-from csaw26.overseer import Advice, OverseerConfig
-from csaw26.racing import (
+from antihydra.challenge import Challenge
+from antihydra.overseer import Advice, OverseerConfig
+from antihydra.racing import (
     LaneResult,
     LaneSpec,
     LaneState,
     RaceCoordinator,
     load_lane_specs,
 )
+from antihydra.tools import CostLedger
 
 
 class FakeLane:
@@ -282,6 +283,60 @@ class RacingTests(unittest.TestCase):
         self.assertEqual(self.fakes[2].delivered, [])
         self.assertEqual(report["overseer"]["hints"], 1)
         self.assertEqual(report["hints"]["sources"], {"overseer": 1})
+
+    def test_run_log_keeps_full_commands(self) -> None:
+        specs = [LaneSpec(id=1, model="fake/a")]
+        long_command = "echo " + "x" * 400 + "\nsecond line"
+
+        def lane_factory(spec, lane_dir, emit, hints):
+            emit(long_command)
+            return FakeLane(spec, {"delay": 0.02, "status": "unsolved"}, emit, hints)
+
+        coordinator = RaceCoordinator(
+            self.challenge,
+            specs,
+            race_dir=self.root / "race",
+            lane_factory=lane_factory,
+            start_service=False,
+            follow=False,
+            quiet=True,
+            poll_seconds=0.02,
+        )
+        coordinator.run()
+
+        log = (self.root / "race" / "lane-1" / "run.log").read_text(encoding="utf-8")
+        self.assertIn(long_command, log)
+
+    def test_failed_lane_keeps_its_spend(self) -> None:
+        class BoomLane(FakeLane):
+            def __init__(self, spec, behavior, emit, hints=None) -> None:
+                super().__init__(spec, behavior, emit, hints)
+                self.ledger = CostLedger()
+                self._rounds = 7
+
+            def run(self) -> LaneResult:
+                self.ledger.add(0.05)
+                raise RuntimeError("boom")
+
+        def lane_factory(spec, lane_dir, emit, hints):
+            return BoomLane(spec, {}, emit, hints)
+
+        report = RaceCoordinator(
+            self.challenge,
+            [LaneSpec(id=1, model="fake/a")],
+            race_dir=self.root / "race",
+            lane_factory=lane_factory,
+            start_service=False,
+            follow=False,
+            quiet=True,
+            poll_seconds=0.02,
+        ).run()
+
+        lane = report["lanes"][0]
+        self.assertEqual(lane["status"], "error")
+        self.assertAlmostEqual(lane["cost"], 0.05)
+        self.assertEqual(lane["rounds"], 7)
+        self.assertIn("RuntimeError: boom", lane["error"])
 
     def test_lane_specs_require_a_source(self) -> None:
         with self.assertRaises(ValueError):

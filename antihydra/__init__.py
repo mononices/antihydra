@@ -1,4 +1,4 @@
-"""csaw26 — an independent LLM CTF solver for CSAW/NYU-style challenges.
+"""antihydra — an independent LLM CTF solver for CSAW/NYU-style challenges.
 
 This package is a clean-room implementation for this repository. It targets
 the CSAW ``challenge.json`` format and the ``ctfnet`` docker-compose

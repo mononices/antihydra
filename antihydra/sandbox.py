@@ -7,11 +7,14 @@ import shlex
 import shutil
 import subprocess
 import sys
+import threading
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from typing import Callable
 
-LEASE_LABEL = "csaw26.sandbox"
+LEASE_LABEL = "antihydra.sandbox"
 KEEP_ALIVE = "tail -f /dev/null"
 
 _WINDOWS_DOCKER_HINTS = (
@@ -102,6 +105,43 @@ def cleanup_orphans(docker: str, label: str = LEASE_LABEL) -> int:
     return len(ids)
 
 
+MEMORY_UNITS = {"k": 1024, "m": 1024**2, "g": 1024**3, "t": 1024**4}
+
+
+def parse_memory(value: str) -> int | None:
+    """Parse docker-style memory strings like ``4g`` into bytes."""
+    text = value.strip().lower()
+    if text.isdigit():
+        return int(text)
+    if text and text[-1] in MEMORY_UNITS:
+        try:
+            return int(float(text[:-1]) * MEMORY_UNITS[text[-1]])
+        except ValueError:
+            return None
+    return None
+
+
+def warn_memory(
+    docker: str, memory: str, containers: int, say: Callable[[str], None]
+) -> None:
+    """Warn when ``containers`` sandboxes of ``memory`` each exceed the Docker VM."""
+    per_container = parse_memory(memory)
+    if per_container is None:
+        return
+    probe = subprocess.run(
+        [docker, "info", "--format", "{{.MemTotal}}"], capture_output=True
+    )
+    try:
+        total = int(probe.stdout.decode("utf-8", "replace").strip())
+    except ValueError:
+        return
+    if total and containers * per_container > total * 0.9:
+        say(
+            f"[warn] {containers} sandbox(es) x {memory} exceeds the Docker VM's "
+            f"{total / 1024**3:.1f} GiB; lower the memory limit or concurrency"
+        )
+
+
 def _decode(data: bytes | None) -> str:
     if not data:
         return ""
@@ -148,7 +188,7 @@ class Sandbox:
     ) -> None:
         self.docker = docker or find_docker()
         self.image = image
-        self.name = name or f"csaw26-{uuid.uuid4().hex[:10]}"
+        self.name = name or f"antihydra-{uuid.uuid4().hex[:10]}"
         self.network = network
         self.platform = platform
         self.memory = memory
@@ -156,12 +196,14 @@ class Sandbox:
         self.workdir = workdir
         self.label = label
         self.container_id: str | None = None
+        self._stop_lock = threading.Lock()
         self.shell = "bash"
 
     def start(self, timeout: float = 120) -> "Sandbox":
         """Start the container and detect the available shell."""
         if self.container_id:
             return self
+        self._require_image(timeout)
         command = [
             self.docker,
             "run",
@@ -184,13 +226,35 @@ class Sandbox:
             command += ["-w", self.workdir]
         command += [self.image, "sh", "-c", KEEP_ALIVE]
         proc = subprocess.run(command, capture_output=True, timeout=timeout)
+        silent = not _decode(proc.stderr).strip() and not _decode(proc.stdout).strip()
+        if proc.returncode != 0 and silent:
+            # A silent failure is a daemon hiccup rather than a bad image or flag.
+            time.sleep(1.0)
+            proc = subprocess.run(command, capture_output=True, timeout=timeout)
         if proc.returncode != 0:
+            detail = (
+                _decode(proc.stderr).strip()
+                or _decode(proc.stdout).strip()
+                or "no output"
+            )
             raise SandboxError(
-                "failed to start sandbox container:\n" + _decode(proc.stderr).strip()
+                f"failed to start sandbox container (exit {proc.returncode}):\n{detail}"
             )
         self.container_id = _decode(proc.stdout).strip()
         self.shell = self._detect_shell()
         return self
+
+    def _require_image(self, timeout: float) -> None:
+        proc = subprocess.run(
+            [self.docker, "image", "inspect", self.image],
+            capture_output=True,
+            timeout=timeout,
+        )
+        if proc.returncode != 0:
+            raise SandboxError(
+                f"sandbox image {self.image!r} is not available locally; "
+                "build it (bash docker/build_sandbox.sh) or pass --image with an existing tag"
+            )
 
     def _detect_shell(self) -> str:
         assert self.container_id
@@ -205,20 +269,21 @@ class Sandbox:
         return "sh"
 
     def stop(self) -> None:
-        """Stop and remove the container; safe to call more than once."""
-        if not self.container_id:
+        """Stop and remove the container; idempotent and safe under concurrent calls."""
+        with self._stop_lock:
+            container_id, self.container_id = self.container_id, None
+        if not container_id:
             return
         subprocess.run(
-            [self.docker, "stop", "-t", "10", self.container_id],
+            [self.docker, "stop", "-t", "10", container_id],
             capture_output=True,
             timeout=120,
         )
         subprocess.run(
-            [self.docker, "rm", "-f", self.container_id],
+            [self.docker, "rm", "-f", container_id],
             capture_output=True,
             timeout=120,
         )
-        self.container_id = None
 
     def running(self) -> bool:
         if not self.container_id:

@@ -1,10 +1,10 @@
-# csaw26 sandbox image: general-purpose CTF toolbox for LLM agents.
+# antihydra sandbox image: general-purpose CTF toolbox for LLM agents.
 #
 # Build:
-#   docker build -t ctfenv:csaw26 docker/sandbox
+#   docker build -t ctfenv:antihydra docker/sandbox
 #
 # Heavy optional layers can be disabled:
-#   docker build -t ctfenv:csaw26 \
+#   docker build -t ctfenv:antihydra \
 #     --build-arg WITH_HEAVY=0 --build-arg WITH_TORCH=0 docker/sandbox
 
 FROM ubuntu:22.04

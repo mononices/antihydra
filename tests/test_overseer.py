@@ -5,16 +5,16 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
-from csaw26.challenge import Challenge
-from csaw26.llm import Reply
-from csaw26.overseer import (
+from antihydra.challenge import Challenge
+from antihydra.llm import Reply
+from antihydra.overseer import (
     Overseer,
     OverseerConfig,
     build_digest,
     evaluate_triggers,
     parse_advice,
 )
-from csaw26.racing import LaneState
+from antihydra.racing import LaneState
 
 
 class ScriptedLLM:
