@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import time
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -133,6 +134,7 @@ class Agent:
         self._tracker = StallTracker(self.stall.window)
         self._stall_events = 0
         self._stall_handled_round = -1
+        self._recent_activity: deque[str] = deque(maxlen=12)
 
     def run(self) -> RunResult:
         state = self.state
@@ -243,6 +245,9 @@ class Agent:
                         self._emit_event(
                             "tool_result",
                             {"name": call.name, "preview": observation[:400]},
+                        )
+                        self._recent_activity.append(
+                            self._activity_line(call, observation)
                         )
                         if (
                             call.name == "submit_flag"
@@ -533,7 +538,10 @@ class Agent:
         self._say(f"{self._prefix()}-> {label} starts: {task.strip()}")
         result = worker.run()
 
-        summary = worker_state.summary or f"(worker ended: {result.reason}, no summary)"
+        if worker_state.summary:
+            summary = worker_state.summary
+        else:
+            summary = self._worker_handoff(task, result, worker)
         if worker_state.solved:
             self.state.solved = True
             self.state.flag = worker_state.flag or self.challenge.flag
@@ -566,6 +574,7 @@ class Agent:
         )
         return {
             "status": result.reason,
+            "label": label,
             "summary": clip(summary, 4000),
             "rounds": result.rounds,
             "cost": round(result.cost, 6),
@@ -616,6 +625,34 @@ class Agent:
             prepared.append(message)
         prepared.reverse()
         return prepared
+
+    def _activity_line(self, call: Any, observation: str) -> str:
+        """One-line trail entry for the fallback subtask handoff."""
+        detail = " ".join(str(observation).split())
+        return clip(f"{call.name} {self._describe_call(call)} -> {detail}", 200)
+
+    def recent_activity(self, limit: int = 6) -> list[str]:
+        """Most recent tool calls with short observation previews."""
+        return list(self._recent_activity)[-max(int(limit), 1):]
+
+    @staticmethod
+    def _worker_handoff(task: str, result: RunResult, worker: "Agent") -> str:
+        """Deterministic board entry when a worker ends without finish_task."""
+
+        def clean(value: Any) -> str:
+            return " ".join(str(value).split())
+
+        parts = [
+            f"(no finish_task; ended: {result.reason}, "
+            f"rounds={result.rounds}, cost=${result.cost:.3f})"
+        ]
+        if result.error:
+            parts.append(f"error: {clean(result.error)[:200]}")
+        parts.append(f"task: {clip(clean(task), 240)}")
+        trail = worker.recent_activity()
+        if trail:
+            parts.append("trail: " + " | ".join(trail))
+        return " ".join(parts)
 
     def _describe_call(self, call: Any) -> str:
         """Full tool-call rendering; run.log keeps it verbatim, the console trims."""

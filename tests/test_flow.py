@@ -148,6 +148,26 @@ class FlowTests(unittest.TestCase):
         self.assertEqual(result.flag, self.challenge.flag)
         self.assertAlmostEqual(self.ledger.total, 0.02)
 
+    def test_worker_without_summary_leaves_activity_trail(self) -> None:
+        script = [
+            reply(
+                (
+                    "spawn_subtask",
+                    {"task": "triage the media file", "max_rounds": 1},
+                )
+            ),
+            reply(("run_command", {"command": "exiftool demo.mp4"})),
+            reply(("submit_flag", {"flag": self.challenge.flag})),
+        ]
+        result = self.make_agent(script).run()
+
+        self.assertTrue(result.solved)
+        board = self.blackboard.read()
+        self.assertIn("- [subtask] (subtask-1)", board)
+        self.assertIn("no finish_task", board)
+        self.assertIn("max_rounds", board)
+        self.assertIn("run_command exiftool demo.mp4", board)
+
     def test_blackboard_is_simple_markdown(self) -> None:
         self.blackboard.append("alpha offset", kind="fact", source="main")
         self.blackboard.append("beta path failed", kind="deadend", source="subtask-1")
