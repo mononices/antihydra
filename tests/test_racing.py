@@ -17,6 +17,7 @@ from antihydra.racing import (
     LaneSpec,
     LaneState,
     RaceCoordinator,
+    lane_label,
     load_lane_specs,
 )
 from antihydra.tools import CostLedger
@@ -341,6 +342,14 @@ class RacingTests(unittest.TestCase):
     def test_lane_specs_require_a_source(self) -> None:
         with self.assertRaises(ValueError):
             load_lane_specs([], None)
+
+    def test_lane_label_is_docker_safe(self) -> None:
+        spec = LaneSpec(id=2, model="openrouter/deepseek/deepseek-v4.1")
+        self.assertEqual(
+            lane_label("01__finders keepers", spec),
+            "antihydra.lane.01__finders-keepers.2",
+        )
+        self.assertNotIn(" ", lane_label("tab\tand\nnewline", spec))
 
 
 if __name__ == "__main__":

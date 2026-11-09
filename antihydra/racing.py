@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import threading
 import time
 import traceback
@@ -147,7 +148,9 @@ class LaneRunner(Protocol):
 
 
 def lane_label(race_id: str, spec: LaneSpec) -> str:
-    return f"antihydra.lane.{race_id}.{spec.id}"
+    """Per-lane docker label; race ids carry challenge names and may have spaces."""
+    safe_id = re.sub(r"[^A-Za-z0-9_.-]+", "-", race_id)
+    return f"antihydra.lane.{safe_id}.{spec.id}"
 
 
 def load_lane_specs(
