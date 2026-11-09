@@ -1,0 +1,270 @@
+[01] run_command ls -la /home/ctfplayer/ctf_files/ && find /home/ctfplayer/ctf_files -type f | head -50
+[01] read_file {"path": "/home/ctfplayer/ctf_files/player/main.py"}
+[04] run_command cat /home/ctfplayer/ctf_files/player/requirements.txt; echo ---; python3 -c "import Crypto; print(Crypto.__version__)"; echo ---; python3 -c "from hashlib import shake_256; print(shake_256(b'x').digest(5).hex())"
+[04] get_findings {}
+[08] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+from hashlib import shake_256
+# sanity: replicate shift generation from base_nonce (unknown), but verify the algorithm structure
+# material = shake_256(base_nonce).digest(5)
+# available = list(range(1,64)); shifts = []; for byte in material[1:]: idx = byte % len(available); shifts.append(available.pop(idx))
+# num = material[0]&1
+
+# Test: state_at(x,seed) should be linear-ish? Actually transform is GF(2)-linear in state for fixed num.
+# Verify transformation/JUMPS machinery by writing a reference implementation and checking state_at(x, seed) == transform^x(seed)
+import random
+MASK64=(1<<64)-1
+
+def make_transforms(num, shifts):
+    def transform(state):
+        if num % 2 == 0:
+            state ^= (state << shifts[0]) & MASK64
+            state ^= state >> shifts[1]
+            state ^= (state << shifts[2]) & MASK64
+            state ^= state >> shifts[3]
+        else:
+            state ^= (state >> shifts[0])
+            state ^= (state << shifts[1]) & MASK64
+            state ^= (state >> shifts[2])
+            state ^= (state << shifts[3]) & MASK64
+        return state & MASK64
+    return transform
+
+def transformation(operator, state):
+    result = 0
+    for bit in range(64):
+        if state & (1 << bit):
+            result ^= operator[bit]
+    return result & MASK64
+
+def square_operator(operator):
+    return [transformation(operator, column) for column in operator]
+
+def build_jump_table(num, shifts):
+    t = make_transforms(num, shifts)
+    first_jump = [t(1<<bit) for bit in range(64)]
+    jumps=[first_jump]
+    for _ in range(63):
+        jumps.append(square_operator(jumps[-1]))
+    return jumps
+
+def state_at(x, seed, jumps):
+    state = seed & MASK64
+    for bit in range(64):
+        if x & (1<<bit):
+            state = transformation(jumps[bit], state)
+    return state
+
+random.seed(1)
+shifts = random.sample(range(1,64),4)
+num = random.randint(0,1)
+jumps = build_jump_table(num, shifts)
+t = make_transforms(num, shifts)
+seed = random.getrandbits(64)
+# check state_at(x) == t^x(seed) for a few x
+for x in [0,1,2,3,5,100,12345]:
+    s = seed
+    for _ in range(x):
+        s = t(s)
+    assert state_at(x,seed,jumps) == s, x
+print("jump table machinery verified: state_at(x,seed) = T^x(seed) where T is invertible GF(2)-linear")
+EOF
+[13] run_command cd /home/ctfplayer/workspace && cat > probe.py <<'EOF'
+import socket, sys
+
+HOST, PORT = "polly.chal.csaw.io", 5000
+
+def recv_until(s, marker, timeout=10):
+    s.settimeout(timeout)
+    data = b""
+    while marker not in data:
+        chunk = s.recv(4096)
+        if not chunk:
+            break
+        data += chunk
+    return data
+
+def main():
+    s = socket.create_connection((HOST, PORT))
+    banner = recv_until(s, b"??\n")
+    print("BANNER:", banner.decode(errors="replace"))
+    # ask for x=0 with a known plaintext
+    s.sendall(b"0\n")
+    resp = recv_until(s, b"encrypted: ")
+    print("RESP1:", resp.decode(errors="replace"))
+    pt = b"A"*64
+    s.sendall(pt + b"\n")
+    resp2 = recv_until(s, b"byte is: ")
+    # read the rest of that line
+    s.settimeout(5)
+    try:
+        resp2 += s.recv(4096)
+    except Exception as e:
+        pass
+    print("RESP2:", resp2.decode(errors="replace"))
+    s.close()
+
+main()
+EOF
+python3 probe.py
+[19] run_command cd /home/ctfplayer/workspace && cat > analyze.py <<'EOF'
+# Analysis of the challenge structure.
+#
+# Observations:
+# - key = os.urandom(32) (secret), base_nonce = os.urandom(9) (secret), seed = 64-bit (secret, nonzero).
+# - shifts[4] derived from shake_256(base_nonce).digest(5): material[1..4], num = material[0]&1.
+#   Only 4 shifts drawn from 63 values, and num 1 bit. So only 63*62*61*60*2 = 28,608,240 possible (shifts,num) combos!
+#   But we don't know base_nonce... however shifts/num only depend on base_nonce via shake_256(base_nonce).digest(5).
+#   base_nonce is 9 random bytes = 72 bits. Can't brute force directly.
+#
+# - nonce = base_nonce || (state & 0xFFFFFF) where state = T^x(seed), T = transform (GF(2)-linear, invertible?).
+#   We are given the full 12-byte nonce in the banner! nonce = 0037b2ef8bf137145c18e56e
+#   So base_nonce = nonce[:9] = 0037b2ef8bf137145c, and state & 0xFFFFFF = 0x18e56e.
+#   => We can compute shifts and num ourselves from base_nonce! 
+#
+# Wait: nonce printed in banner is base_nonce + (state & 0xFFFFFF).to_bytes(3,"big") -> 12 bytes total.
+# base_nonce is 9 bytes, so first 9 bytes = base_nonce. YES! We know base_nonce.
+#
+# So shifts and num are known. Then T is known and invertible.
+# For each query x, we get nonce byte (last byte of state) -> low 8 bits of T^x(seed).
+# We need to find seed (64 bits) such that low 24 bits of T^x(seed) match observed for chosen x.
+# Actually we get only the last byte (8 bits) of the 24-bit state value. But we can choose x freely.
+#
+# Better: use x=1: get state = T(seed) low 8 bits. Many x give linear equations on seed's 64 bits
+# (T is GF(2)-linear in seed!). state_at(x, seed) = T^x(seed) is linear in seed.
+# Each query gives 8 linear equations (bits 0..7 of output). With 64 unknowns, need 8 queries (64 bits).
+# Then solve linear system over GF(2) -> recover seed exactly. Then compute state at flag_x?
+# Wait, we need flag_x (the x used for the flag) and the flag plaintext.
+# Hmm, we don't know flag_x. But we know the flag's nonce = base_nonce || (state_at(flag_x, seed) & 0xFFFFFF).
+# From banner nonce we know state_at(flag_x, seed) & 0xFFFFFF = 0x18e56e (24 bits).
+# With seed known, we can find flag_x by: state_at(x, seed) & 0xFFFFFF == 0x18e56e. Since T has order dividing... 
+# T is invertible linear map on 64 bits; the sequence T^x(seed) is periodic. We can search x in 0..2^64? 
+# Better: we know state_at(flag_x, seed) low 24 bits. The map x -> T^x(seed) is a linear recurrence;
+# find x such that T^x(seed) ≡ target mod 2^24. Since low bits depend on low bits of seed (T is triangular-ish?),
+# we can solve bit by bit / use the structure.
+#
+# Actually simpler: we don't need flag_x directly. The flag ciphertext is ChaCha20 with key=key (unknown!)
+# and nonce = base_nonce || (state & 0xFFFFFF). We know the full nonce from banner.
+# But we don't know the key! The key is random 32 bytes, never leaked.
+# Hmm. So how do we decrypt the flag? We need the ChaCha20 keystream for that nonce.
+# We can get keystream for nonce = base_nonce || (state_at(x,seed) & 0xFFFFFF) for chosen x, using known plaintext.
+# If we can choose x such that state_at(x,seed) & 0xFFFFFF == 0x18e56e (the flag's nonce), we get the flag keystream!
+# So we need to find x with state_at(x,seed) ≡ 0x18e56e (mod 2^24). Then encrypt known plaintext with that x,
+# XOR with flag ciphertext to get flag. That's the plan!
+#
+# So: recover seed via linear algebra (8 queries), then find x such that T^x(seed) ≡ target (mod 2^24).
+# The low 24 bits of T^x(seed): since T is linear, and we only care mod 2^24, the map T mod 2^24 is well-defined
+# (low bits of output depend only on low bits of input for these shift-xor ops? shifts can be up to 63, so a right shift
+# brings high bits into low bits! So not triangular. But T is invertible mod 2^64, and mod 2^24 restriction isn't
+# well-defined in general.)
+#
+# Alternative approach: just find x such that state_at(x,seed) == some known value? We know full state at flag_x is
+# unknown except low 24 bits. But maybe T has small order modulo the relevant structure, or we can solve
+# T^x(seed) ≡ target mod 2^24 by treating it as a linear recurrence and using meet-in-the-middle / BSGS on
+# the 24-bit output? The sequence s_x = T^x(seed) mod 2^24 has period = order of T restricted to the
+# quotient... hmm.
+#
+# Better idea: find x directly via the structure: we want T^x(seed) & 0xFFFFFF == 0x18e56e.
+# Equivalently, T^x(seed) = 0x18e56e + 2^24 * k for some k. Not helpful directly.
+#
+# Even better: We know seed after recovery. Then we can compute T^x(seed) for x as a linear function of x's bits:
+# state_at(x, seed) = sum over bits of x of JUMPS[bit](seed) = M(x) where M is linear in x (for fixed seed).
+# We want the low 24 bits of M(x) = target. M(x) = sum_{i: x_i=1} v_i where v_i = JUMPS[i](seed).
+# So we need to solve a linear system over GF(2) on the low 24 bits: 24 equations, 64 unknowns (bits of x).
+# Linear system! Solve for x (any solution). Then query with that x and get the keystream for the flag's nonce.
+#
+# Wait, but careful: the flag's nonce low 3 bytes = state_at(flag_x, seed) & 0xFFFFFF. If we find x with
+# state_at(x,seed) & 0xFFFFFF == that, then nonce matches exactly (base_nonce same). 
+
+print("Plan:")
+print("1. Connect, read banner: nonce (12 bytes) -> base_nonce = nonce[:9], target = int(nonce[9:],16)")
+print("2. Compute shifts/num from shake_256(base_nonce).digest(5).")
+print("3. Build T (64x64 GF(2) matrix), JUMPS.")
+print("4. Query x = 2^i for i in 0..63? Each query gives low byte of T^{2^i}(seed) = JUMPS[i](seed) low 8 bits.")
+print("   Actually state_at(2^i, seed) = JUMPS[i](seed) (since only bit i set). And JUMPS[i] = T^{2^i}.")
+print("   We get 8 bits per query. 8 queries (i=0..7) give 64 equations on seed's 64 bits. Solve.")
+print("5. Solve GF(2) system for seed.")
+print("6. Solve for x with state_at(x,seed) & 0xFFFFFF == target (24 equations, 64 unknowns).")
+print("7. Query that x with known plaintext -> keystream -> XOR with flag ciphertext -> flag.")
+EOF
+python3 analyze.py
+[21] create_file {"path": "/home/ctfplayer/workspace/solve.py", "content": "import socket, re, sys\nfrom hashlib import shake_256\n\nHOST, PORT = \"polly.chal.csaw.io\", 5000\nMASK64 = (1 << 64) - 1\n\n# ---------- GF(2) linear algebra ----------\ndef solve_gf2(rows, nvars):\n    \"\"\"rows: list of (coeff_int, rhs_bit). coeff_int bit j = coeff of var j. Returns solution int or None.\"\"\"\n    rows = list(rows)\n    pivots = {}\n    for coeff, rhs in rows:\n        c, r = coeff, rhs & 1\n        while c:\n            p = c.bit_length() - 1\n            if p in pivots:\n                pc, pr = pivots[p]\n                c ^= pc\n                r ^= pr\n            else:\n                pivots[p] = (c, r)\n                break\n        else:\n            if r:\n                return None  # inconsistent\n    sol = 0\n    # back-substitute: pivot p equation: var_p + sum_{j<p} c_j var_j = r\n    for p in sorted(pivots.keys()):\n        c, r = pivots[p]\n        # c has leading bit p; other bits < p\n        val = r\n        rest = c & ((1 << p) - 1)\n        while rest:\n            j = rest.bit_length() - 1\n            val ^= (sol >> j) & 1\n            rest ^= 1 << j\n        if val:\n            sol |= 1 << p\n    return sol\n\n# ---------- challenge math ----------\ndef make_transform(num, shifts):\n    def transform(state):\n        if num % 2 == 0:\n            state ^= (state << shifts[0]) & MASK64\n            state ^= state >> shifts[1]\n            state ^= (state << shifts[2]) & MASK64\n            state ^= state >> shifts[3]\n        else:\n            state ^= (state >> shifts[0])\n            state ^= (state << shifts[1]) & MASK64\n            state ^= (state >> shifts[2])\n            state ^= (state << shifts[3]) & MASK64\n        return state & MASK64\n    return transform\n\ndef transformation(operator, state):\n    result = 0\n    s = state\n    while s:\n        b = (s & -s).bit_length() - 1\n        result ^= operator[b]\n        s &= s - 1\n    return result & MASK64\n\ndef square_operator(operator):\n    return [transformation(operator, column) for column in operator]\n\ndef build_jumps(num, shifts):\n    t = make_transform(num, shifts)\n    first_jump = [t(1 << bit) for bit in range(64)]\n    jumps = [first_jump]\n    for _ in range(63):\n        jumps.append(square_operator(jumps[-1]))\n    return jumps\n\ndef state_at(x, seed, jumps):\n    return transformation(jumps, x) ^ 0 if False else _state_at(x, seed, jumps)\n\ndef _state_at(x, seed, jumps):\n    state = seed & MASK64\n    for bit in range(64):\n        if x & (1 << bit):\n            state = transformation(jumps[bit], state)\n    return state\n\n# ---------- protocol ----------\nclass Conn:\n    def __init__(self, host, port):\n        self.s = socket.create_connection((host, port), timeout=20)\n        self.buf = b\"\"\n    def recv_until(self, marker):\n        while marker not in self.buf:\n            chunk = self.s.recv(65536)\n            if not chunk:\n                raise EOFError(\"connection closed; buf=\" + repr(self.buf[-500:]))\n            self.buf += chunk\n        idx = self.buf.index(marker) + len(marker)\n        out, self.buf = self.buf[:idx], self.buf[idx:]\n        return out\n    def send_line(self, data: bytes):\n        self.s.sendall(data + b\"\\n\")\n    def query(self, x, plaintext):\n        self.recv_until(b\"which seed modifier would you like to use?\")\n        self.send_line(str(x).encode())\n        self.recv_until(b\"enter a string to be encrypted: \")\n        self.send_line(plaintext)\n        resp = self.recv_until(b\"Your nonce byte is: \")\n        resp += self.recv_until(b\"\\n\")\n        m = re.search(rb\"Your ciphertext is: ([0-9a-f]+)\", resp)\n        n = re.search(rb\"Your nonce byte is: ([0-9a-f]+)\", resp)\n        assert m and n, resp\n        return bytes.fromhex(m.group(1).decode()), int(n.group(1), 16)\n\ndef main():\n    c = Conn(HOST, PORT)\n    banner = c.recv_until(b\"which seed modifier would you like to use?\")\n    print(banner.decode(errors=\"replace\"))\n    m = re.search(rb\"encrypted flag is ([0-9a-f]+), the nonce is ([0-9a-f]+)\", banner)\n    flag_ct = bytes.fromhex(m.group(1).decode())\n    nonce = bytes.fromhex(m.group(2).decode())\n    print(\"flag_ct len:\", len(flag_ct), \"nonce:\", nonce.hex())\n\n    base_nonce = nonce[:9]\n    target = int.from_bytes(nonce[9:12], \"big\")\n    print(\"base_nonce:\", base_nonce.hex(), \"target:\", hex(target))\n\n    material = shake_256(base_nonce).digest(5)\n    available = list(range(1, 64))\n    shifts = []\n    for byte in material[1:]:\n        idx = byte % len(available)\n        shifts.append(available.pop(idx))\n    num = material[0] & 1\n    print(\"shifts:\", shifts, \"num:\", num)\n\n    jumps = build_jumps(num, shifts)\n\n    # Query x = 2^i for i in 0..15, get low byte of T^{2^i}(seed)\n    NQ = "}
+[22] run_command cd /home/ctfplayer/ctf_files/player && wc -l main.py && sed -n '60,200p' main.py
+[25] run_command cd /home/ctfplayer/ctf_files/player && sed -n '1,60p' main.py
+[28] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+# Verify: is T invertible? And is the low-24-bit map well-defined on low-24 bits of input?
+# For shifts with left-shifts, low bits of output depend only on low bits of input? 
+# state ^= (state << s): low 24 bits of result depend on low 24-s bits of state... yes only low bits.
+# state ^= state >> s: low 24 bits of result depend on bits 0..23+s of state -> high bits leak in!
+# So low-24 output depends on high input bits. Not triangular. But we can still solve the linear system on 64 vars.
+import random
+MASK64=(1<<64)-1
+def make_transform(num, shifts):
+    def transform(state):
+        if num % 2 == 0:
+            state ^= (state << shifts[0]) & MASK64
+            state ^= state >> shifts[1]
+            state ^= (state << shifts[2]) & MASK64
+            state ^= state >> shifts[3]
+        else:
+            state ^= (state >> shifts[0])
+            state ^= (state << shifts[1]) & MASK64
+            state ^= (state >> shifts[2])
+            state ^= (state << shifts[3]) & MASK64
+        return state & MASK64
+    return transform
+
+random.seed(0)
+shifts = random.sample(range(1,64),4)
+num = 0
+t = make_transform(num, shifts)
+# check invertibility: build matrix and rank
+cols = [t(1<<b) for b in range(64)]
+# gaussian elimination
+rows = cols[:]  # column b is image of e_b
+basis = []
+rank = 0
+for v in rows:
+    x = v
+    for b in basis:
+        x = min(x, x ^ b)
+    # simple: use linear basis
+    y = v
+    for b in basis:
+        y = min(y, y ^ b)
+    if y:
+        basis.append(y)
+        basis.sort(reverse=True)
+        rank += 1
+print("rank of T =", rank)
+EOF
+[31] create_file {"content": "import socket, re, sys\nfrom hashlib import shake_256\n\nHOST, PORT = \"polly.chal.csaw.io\", 5000\nMASK64 = (1 << 64) - 1\n\n# ---------------- GF(2) linear algebra ----------------\ndef solve_gf2(rows, nvars):\n    \"\"\"rows: list of (coeff_int, rhs_bit). coeff bit j = coeff of var j.\n    Returns a solution int (free vars = 0) or None if inconsistent.\"\"\"\n    pivots = {}\n    for coeff, rhs in rows:\n        c, r = coeff, rhs & 1\n        while c:\n            p = c.bit_length() - 1\n            if p in pivots:\n                pc, pr = pivots[p]\n                c ^= pc\n                r ^= pr\n            else:\n                pivots[p] = (c, r)\n                break\n        else:\n            if r:\n                return None\n    sol = 0\n    for p in sorted(pivots.keys()):\n        c, r = pivots[p]\n        val = r\n        rest = c & ((1 << p) - 1)\n        while rest:\n            j = rest.bit_length() - 1\n            val ^= (sol >> j) & 1\n            rest ^= 1 << j\n        if val:\n            sol |= 1 << p\n    return sol\n\ndef rank_gf2(rows, nvars):\n    pivots = {}\n    for coeff, rhs in rows:\n        c = coeff\n        while c:\n            p = c.bit_length() - 1\n            if p in pivots:\n                c ^= pivots[p]\n            else:\n                pivots[p] = c\n                break\n    return len(pivots)\n\n# ---------------- challenge math ----------------\ndef make_transform(num, shifts):\n    def transform(state):\n        if num % 2 == 0:\n            state ^= (state << shifts[0]) & MASK64\n            state ^= state >> shifts[1]\n            state ^= (state << shifts[2]) & MASK64\n            state ^= state >> shifts[3]\n        else:\n            state ^= (state >> shifts[0])\n            state ^= (state << shifts[1]) & MASK64\n            state ^= (state >> shifts[2])\n            state ^= (state << shifts[3]) & MASK64\n        return state & MASK64\n    return transform\n\ndef transformation(operator, state):\n    result = 0\n    s = state\n    while s:\n        b = (s & -s).bit_length() - 1\n        result ^= operator[b]\n        s &= s - 1\n    return result & MASK64\n\ndef square_operator(operator):\n    return [transformation(operator, column) for column in operator]\n\ndef build_jumps(num, shifts):\n    t = make_transform(num, shifts)\n    jumps = [[t(1 << bit) for bit in range(64)]]\n    for _ in range(63):\n        jumps.append(square_operator(jumps[-1]))\n    return jumps\n\ndef state_at(x, seed, jumps):\n    state = seed & MASK64\n    for bit in range(64):\n        if x & (1 << bit):\n            state = transformation(jumps[bit], state)\n    return state\n\n# ---------------- protocol ----------------\nclass Conn:\n    def __init__(self, host, port):\n        self.s = socket.create_connection((host, port), timeout=30)\n        self.buf = b\"\"\n    def recv_until(self, marker):\n        while marker not in self.buf:\n            chunk = self.s.recv(65536)\n            if not chunk:\n                raise EOFError(\"connection closed; tail=\" + repr(self.buf[-800:]))\n            self.buf += chunk\n        idx = self.buf.index(marker) + len(marker)\n        out, self.buf = self.buf[:idx], self.buf[idx:]\n        return out\n    def send_line(self, data: bytes):\n        self.s.sendall(data + b\"\\n\")\n    def query(self, x, plaintext):\n        self.recv_until(b\"which seed modifier would you like to use?\")\n        self.send_line(str(x).encode())\n        self.recv_until(b\"enter a string to be encrypted: \")\n        self.send_line(plaintext)\n        resp = self.recv_until(b\"Your nonce byte is: \")\n        resp += self.recv_until(b\"\\n\")\n        m = re.search(rb\"Your ciphertext is: ([0-9a-f]+)\", resp)\n        n = re.search(rb\"Your nonce byte is: ([0-9a-f]+)\", resp)\n        assert m and n, resp\n        return"}
+[34] create_file {"path": "/home/ctfplayer/workspace/solve.py", "content": "import socket, re, sys\nfrom hashlib import shake_256\n\nHOST, PORT = \"polly.chal.csaw.io\", 5000\nMASK64 = (1 << 64) - 1\n\n# ---------------- GF(2) linear algebra ----------------\ndef solve_gf2(rows, nvars):\n    \"\"\"rows: list of (coeff_int, rhs_bit). coeff bit j = coeff of var j.\n    Returns a solution int (free vars = 0) or None if inconsistent.\"\"\"\n    pivots = {}\n    for coeff, rhs in rows:\n        c, r = coeff, rhs & 1\n        while c:\n            p = c.bit_length() - 1\n            if p in pivots:\n                pc, pr = pivots[p]\n                c ^= pc\n                r ^= pr\n            else:\n                pivots[p] = (c, r)\n                break\n        else:\n            if r:\n                return None\n    sol = 0\n    for p in sorted(pivots.keys()):\n        c, r = pivots[p]\n        val = r\n        rest = c & ((1 << p) - 1)\n        while rest:\n            j = rest.bit_length() - 1\n            val ^= (sol >> j) & 1\n            rest ^= 1 << j\n        if val:\n            sol |= 1 << p\n    return sol\n\ndef rank_gf2(rows):\n    pivots = {}\n    for coeff, rhs in rows:\n        c = coeff\n        while c:\n            p = c.bit_length() - 1\n            if p in pivots:\n                c ^= pivots[p]\n            else:\n                pivots[p] = c\n                break\n    return len(pivots)\n\n# ---------------- challenge math ----------------\ndef make_transform(num, shifts):\n    def transform(state):\n        if num % 2 == 0:\n            state ^= (state << shifts[0]) & MASK64\n            state ^= state >> shifts[1]\n            state ^= (state << shifts[2]) & MASK64\n            state ^= state >> shifts[3]\n        else:\n            state ^= (state >> shifts[0])\n            state ^= (state << shifts[1]) & MASK64\n            state ^= (state >> shifts[2])\n            state ^= (state << shifts[3]) & MASK64\n        return state & MASK64\n    return transform\n\ndef transformation(operator, state):\n    result = 0\n    s = state\n    while s:\n        b = (s & -s).bit_length() - 1\n        result ^= operator[b]\n        s &= s - 1\n    return result & MASK64\n\ndef square_operator(operator):\n    return [transformation(operator, column) for column in operator]\n\ndef build_jumps(num, shifts):\n    t = make_transform(num, shifts)\n    jumps = [[t(1 << bit) for bit in range(64)]]\n    for _ in range(63):\n        jumps.append(square_operator(jumps[-1]))\n    return jumps\n\ndef state_at(x, seed, jumps):\n    state = seed & MASK64\n    for bit in range(64):\n        if x & (1 << bit):\n            state = transformation(jumps[bit], state)\n    return state\n\n# ---------------- protocol ----------------\nclass Conn:\n    def __init__(self, host, port):\n        self.s = socket.create_connection((host, port), timeout=30)\n        self.buf = b\"\"\n    def recv_until(self, marker):\n        while marker not in self.buf:\n            chunk = self.s.recv(65536)\n            if not chunk:\n                raise EOFError(\"connection closed; tail=\" + repr(self.buf[-800:]))\n            self.buf += chunk\n        idx = self.buf.index(marker) + len(marker)\n        out, self.buf = self.buf[:idx], self.buf[idx:]\n        return out\n    def send_line(self, data: bytes):\n        self.s.sendall(data + b\"\\n\")\n    def query(self, x, plaintext):\n        self.recv_until(b\"which seed modifier would you like to use?\")\n        self.send_line(str(x).encode())\n        self.recv_until(b\"enter a string to be encrypted: \")\n        self.send_line(plaintext)\n        resp = self.recv_until(b\"Your nonce byte is: \")\n        resp += self.recv_until(b\"\\n\")\n        m = re.search(rb\"Your ciphertext is: ([0-9a-f]+)\", resp)\n        n = re.search(rb\"Your nonce byte is: ([0-9a-f]+)\", resp)\n        assert m and n, resp\n        return bytes.fromhex(m.group(1).decode()), int(n.group(1), 16)\n\ndef main():\n    c = Conn(HOST, PORT)\n    banner = c.recv_until(b\"which seed modifier would you like to use?\")\n    print(banner.decode(errors=\"replace\"))\n    m = re.search(rb\"encrypted flag is ([0-9a-f]+), the nonce is ([0-9a-f]+)\", banner)\n    flag_ct = bytes.fromhex(m.group(1).decode())\n    nonce = bytes.fromhex(m.group(2).decode())\n    print(\"flag_ct len:\", len(flag_ct), \"nonce:\", nonce.hex())\n\n    base_nonce = nonce[:9]\n    target = int.from_bytes(nonce[9:12], \"big\")\n    print(\"base_nonce:\", base_nonce.hex(), \"target(24-bit state):\", hex(target))\n\n    material = shake_256(base_nonce).digest(5)\n    available = list(range(1, 64))\n    shifts = []\n    for byte in material[1:]:\n        idx = byte % len(available)\n        shifts.append(available.pop(idx))\n    num = material[0] & 1\n    print(\"shifts:\", shifts, \"num:\", num)\n\n    jumps = build_jumps(num, shifts)\n\n    # Query x = 2^i for i = 0..15; each gives low byte of T^(2^i)(seed) = JUMPS[i](seed)\n    NQ = 16\n    obs = []\n    for i in range(NQ):\n        ct, nb = c.query(1 << i, b\"A\" * len(flag_ct))\n        obs.append((1 << i, nb))\n        print(f\"query x=2^{i}: nonce byte = {nb:02x}\")\n\n    # Equations: for each query, for each output bit b in 0..7:\n    #   bit b of JUMPS[i](seed) = sum_j seed_j * <e_b, JUMPS[i](e_j)> = rhs\n    # JUMPS[i] is given as operator list: JUMPS[i][j] = image of e_j.\n    rows = []\n    for (x, nb) in obs:\n        i = x.bit_length() - 1\n        op = jumps[i]\n        for b in range(8):\n            coeff = 0\n            for j in range(64):\n                if (op[j] >> b) & 1:\n                    coeff |= 1 << j\n            rhs = (nb >> b) & 1\n            rows.append((coeff, rhs))\n\n    r = rank_gf2(rows)\n    print(\"rank of system:\", r, \"of 64 unknowns\")\n    seed = solve_gf2(rows, 64)\n    if seed is None:\n        print(\"INCONSISTENT SYSTEM\")\n        return\n    print(\"recovered seed:\", hex(seed))\n\n    # Verify seed against all observations\n    ok = all((state_at(x, seed, jumps) & 0xFF) == nb for x, nb in obs)\n    print(\"verify all observations:\", ok)\n    if not ok:\n        print(\"seed wrong, aborting\")\n        return\n\n    # Now find x such that state_at(x, seed) & 0xFFFFFF == target.\n    # state_at(x, seed) = XOR over set bits of x of JUMPS[i](seed) = linear in x.\n    # Precompute v_i = JUMPS[i](seed) for i in 0..63.\n    v = [transformation(jumps[i], seed) for i in range(64)]\n    # For each of the 24 low bits b, equation: sum_i x_i * v_i[b] = target_b\n    rows2 = []\n    for b in range(24):\n        coeff = 0\n        for i in range(64):\n            if (v[i] >> b) & 1:\n                coeff |= 1 << i\n        rhs = (target >> b) & 1\n        rows2.append((coeff, rhs))\n    print(\"rank of x-system:\", rank_gf2(rows2), \"of 64\")\n    x_sol = solve_gf2(rows2, 64)\n    if x_sol is None:\n        print(\"no solution for x; trying extended search\")\n        return\n    print(\"solution x:\", hex(x_sol))\n    chk = state_at(x_sol, seed, jumps)\n    print(\"state_at(x_sol) =\", hex(chk), \"low24 =\", hex(chk & 0xFFFFFF), \"target =\", hex(target))\n    assert (chk & 0xFFFFFF) == target\n\n    # Query with that x using known plaintext -> keystream -> decrypt flag\n    pt = b\"\\x00\" * len(flag_ct)\n    ct2, nb2 = c.query(x_sol, pt)\n    print(\"nonce byte at x_sol:\", hex(nb2), \"expected:\", hex(target & 0xFF))\n    keystream = ct2  # plaintext is zeros\n    flag = bytes(a ^ b for a, b in zip(flag_ct, keystream))\n    print(\"FLAG:\", flag)\n    return flag\n\nif __name__ == \"__main__\":\n    main()\n"}
+[35] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import random, itertools
+import importlib.util
+spec = importlib.util.spec_from_file_location("solve", "/home/ctfplayer/workspace/solve.py")
+# avoid running main
+src = open("solve.py").read().split('def main()')[0]
+ns = {}
+exec(src, ns)
+build_jumps = ns["build_jumps"]; rank_gf2 = ns["rank_gf2"]; transformation = ns["transformation"]
+
+random.seed(12345)
+ranks = {}
+for trial in range(300):
+    shifts = random.sample(range(1,64),4)
+    num = random.randint(0,1)
+    jumps = build_jumps(num, shifts)
+    rows = []
+    for i in range(16):
+        op = jumps[i]
+        for b in range(8):
+            coeff = 0
+            for j in range(64):
+                if (op[j] >> b) & 1:
+                    coeff |= 1 << j
+            rows.append((coeff, 0))
+    r = rank_gf2(rows)
+    ranks[r] = ranks.get(r, 0) + 1
+print("rank distribution over 300 random instances (16 queries):", dict(sorted(ranks.items())))
+EOF

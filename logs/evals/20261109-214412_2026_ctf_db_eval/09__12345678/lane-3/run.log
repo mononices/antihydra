@@ -1,0 +1,917 @@
+[01] run_command ls -la /home/ctfplayer/ctf_files/ && file "/home/ctfplayer/ctf_files/12345678 (1).wav" && ls -la /home/ctfplayer/workspace/ 2>/dev/null; cat /tools.txt 2>/dev/null | head -100
+[02] run_command cd /home/ctfplayer/workspace && cp "/home/ctfplayer/ctf_files/12345678 (1).wav" chal.wav && exiftool chal.wav && strings -n 6 chal.wav | head -50 && python3 -c "
+import wave
+w=wave.open('chal.wav')
+print(w.getparams())
+"
+[03] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import struct
+data=open('chal.wav','rb').read()
+print(len(data))
+pos=12
+while pos < len(data):
+    if pos+8 > len(data): break
+    cid=data[pos:pos+4]
+    sz=struct.unpack('<I',data[pos+4:pos+8])[0]
+    print(pos, cid, sz)
+    if cid==b'data':
+        print('data starts at', pos+8)
+        # don't skip data content fully? we can
+    pos += 8+sz
+    if sz%2: pos+=1
+EOF
+[04] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+data=open('chal.wav','rb').read()
+print(repr(data[6064244:]))
+print(repr(data[12:44]))
+EOF
+soxi chal.wav 2>/dev/null || true
+[05] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import base64
+for s in ['Ml81dDNAMV8=']:
+    print(s, base64.b64decode(s))
+    print(base64.b64decode(s).hex())
+EOF
+[06] run_command cd /home/ctfplayer/workspace && sox chal.wav -n spectrogram -o spec.png -X 2000 -Y 1000 -z 100 2>&1 | tail -5; ls -la spec.png; python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav')
+n=w.getnframes()
+d=np.frombuffer(w.readframes(n),dtype='<i2').reshape(-1,2)
+print(d.shape, d.min(), d.max())
+# check per-channel difference
+diff = d[:,0].astype(np.int32)-d[:,1].astype(np.int32)
+print('diff unique count', np.unique(diff).size, np.unique(diff)[:20], np.unique(diff)[-20:])
+print('max abs diff', np.abs(diff).max())
+EOF
+[07] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav')
+n=w.getnframes()
+d=np.frombuffer(w.readframes(n),dtype='<i2').reshape(-1,2)
+mono = d.mean(axis=1)
+sr=44100
+# frame energy and zero crossing
+frame=1024
+E=[]
+for i in range(0, len(mono)-frame, frame):
+    x=mono[i:i+frame]
+    E.append(np.sqrt(np.mean(x.astype(np.float64)**2)))
+E=np.array(E)
+print('E stats', E.min(), E.max(), E.mean())
+# print coarsely
+import sys
+np.set_printoptions(linewidth=200, precision=0, suppress=True)
+print(E[:: max(1,len(E)//200)])
+EOF
+[08] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes()
+d=np.frombuffer(w.readframes(n),dtype='<i2').reshape(-1,2)
+mono = d[:,0].astype(np.float64)
+sr=44100
+frame=512
+E=np.sqrt(np.convolve(mono**2, np.ones(frame)/frame, mode='same'))
+# threshold
+th = 100
+active = E>th
+# find segments
+idx = np.flatnonzero(np.diff(active.astype(int))!=0)+1
+segs=[]
+prev=0
+state=active[0]
+for i in idx:
+    segs.append((prev,i,state)); prev=i; state=active[i]
+segs.append((prev,len(active),state))
+# merge segments shorter than 0.01s
+out=[]
+for s,e,st in segs:
+    dur=(e-s)/sr
+    if out and st==out[-1][2] and (s-out[-1][1])/sr<0.02:
+        out[-1]=(out[-1][0],e,st)
+    else:
+        out.append((s,e,st))
+print("total segments", len(out))
+for s,e,st in out[:80]:
+    dur=(e-s)/sr
+    if st:
+        x=mono[s:e]
+        # dominant frequency via FFT of whole segment window
+        X=np.abs(np.fft.rfft(x*np.hanning(len(x))))
+        f=np.fft.rfftfreq(len(x),1/sr)
+        top=f[np.argsort(X)[-4:]][::-1]
+        print(f"ON {s/sr:8.3f}-{e/sr:8.3f} dur={dur:6.3f} rms={E[s:e].max():8.0f} freqs={np.round(top,1)}")
+    else:
+        if dur>0.05:
+            print(f"off {s/sr:8.3f}-{e/sr:8.3f} dur={dur:6.3f}")
+EOF
+[09] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=44100
+d=np.frombuffer(w.readframes(n),dtype='<i2').reshape(-1,2)
+for ch in range(2):
+    x=d[:,ch].astype(np.float64)
+    print('channel',ch,'rms',np.sqrt(np.mean(x**2)),'std',x.std(),'unique',np.unique(x).size,'min',x.min(),'max',x.max())
+    # first 0.05 s samples
+    print(x[:40])
+EOF
+[10] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=44100
+d=np.frombuffer(w.readframes(n),dtype='<i2').reshape(-1,2)
+for ch in range(2):
+    x=d[:,ch].astype(np.int64)
+    for bit in range(4):
+        b=((x>>bit)&1).astype(np.uint8)
+        ones=b.mean()
+        print(f'ch{ch} bit{bit}: ones={ones:.4f}')
+    print()
+# both channels interleaved as bytes
+raw = d.astype('<i2').tobytes()
+print('raw len', len(raw))
+# LSB of raw bytes
+bits = (np.frombuffer(raw,dtype=np.uint8)&1)
+print('raw byte LSB ones frac', bits.mean())
+EOF
+[11] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+from PIL import Image
+im=Image.open('spec.png')
+print(im.size, im.mode)
+im2=im.resize((im.width//4, im.height//4))
+im2.save('spec_small.png')
+# crop top half maybe
+im.crop((0,0,im.width,im.height//2)).resize((1500,400)).save('spec_top.png')
+EOF
+ls -la spec*.png
+[12] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=44100
+d=np.frombuffer(w.readframes(n),dtype='<i2').reshape(-1,2)
+x=d[:,0].astype(np.float64)
+print('unique abs', np.unique(np.abs(x)).size)
+# estimate noise floor by median abs
+print('median abs', np.median(np.abs(x)))
+# histogram
+import collections
+vals=np.abs(x).astype(int)
+print(np.percentile(vals,[10,25,50,75,90,95,99]))
+EOF
+[13] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=44100
+d=np.frombuffer(w.readframes(n),dtype='<i2').reshape(-1,2)
+x=d[:,0].astype(np.float64)
+# detect ultrasonic content: energy above 20kHz
+N=4096
+hop=2048
+freqs=np.fft.rfftfreq(N,1/sr)
+mask = freqs>19000
+res=[]
+for i in range(0,len(x)-N,hop):
+    X=np.abs(np.fft.rfft(x[i:i+N]*np.hanning(N)))
+    res.append(X[mask].max())
+res=np.array(res)
+print('ultrasonic energy stats', res.min(), res.max(), res.mean())
+# find regions
+thr=res.mean()*3
+idx=np.where(res>thr)[0]
+print('num hot frames',len(idx))
+if len(idx):
+    # group
+    groups=[]
+    cur=[idx[0]]
+    for a,b in zip(idx, idx[1:]):
+        if b-a<=2: cur.append(b)
+        else: groups.append(cur); cur=[b]
+    groups.append(cur)
+    for g in groups[:40]:
+        print(f'{g[0]*hop/sr:8.3f} - {g[-1]*hop/sr:8.3f} dur {(g[-1]-g[0])*hop/sr:6.3f} peak {res[g].max():.1f}')
+EOF
+[14] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=44100
+d=np.frombuffer(w.readframes(n),dtype='<i2').reshape(-1,2)
+x=d[:,0].astype(np.float64)
+N=8192
+hop=2048
+freqs=np.fft.rfftfreq(N,1/sr)
+res=[]
+for i in range(0,len(x)-N,hop):
+    X=np.abs(np.fft.rfft(x[i:i+N]*np.hanning(N)))
+    res.append(X)
+X=np.array(res)
+# normalized by column median, find peaks over median across time for each freq
+med=np.median(X,axis=0)
+peakfreq = X/ (med+1e-9)
+# find frames with high peak
+m = peakfreq.max(axis=1)
+thr = np.percentile(m, 99.5)
+print('thr',thr)
+idx=np.where(m>thr)[0]
+print(len(idx))
+groups=[]
+if len(idx):
+    cur=[idx[0]]
+    for a,b in zip(idx, idx[1:]):
+        if b-a<=3: cur.append(b)
+        else: groups.append(cur); cur=[b]
+    groups.append(cur)
+for g in groups[:60]:
+    f=X[g].max(axis=0)
+    fi=np.argsort(f)[-6:][::-1]
+    print(f'{g[0]*hop/sr:7.3f}-{g[-1]*hop/sr:7.3f} peakdiff={m[g].max():.1f}', [(round(freqs[i],1), round(float(f[i]),0)) for i in fi])
+EOF
+[15] run_command which whisper whisper-ctranslate2 ffmpeg tesseract 2>/dev/null; pip list 2>/dev/null | grep -i -E "whisper|torch|librosa|soundfile|scipy" ; python3 -c "import scipy; print('scipy', scipy.__version__)"
+[16] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=44100
+d=np.frombuffer(w.readframes(n),dtype='<i2').reshape(-1,2)
+# Look for repeating structure / DTMF / morse
+x=d[:,0].astype(np.float64)
+# detect tones using goertzel over short windows
+def g(x,f,sr):
+    n=np.arange(len(x))
+    return abs(np.sum(x*np.exp(-2j*np.pi*f*n/sr)))
+# check DTMF frequencies
+rows=[697,770,852,941]; cols=[1209,1336,1477,1633]
+win=int(0.04*sr)
+hop=win//2
+res=[]
+for i in range(0,len(x)-win,hop):
+    w_=x[i:i+win]
+    e=np.sqrt(np.mean(w_**2))
+    if e<50: 
+        res.append(('sil',0,0)); continue
+    best=None
+    for r in rows:
+        for c in cols:
+            v=g(w_,r,sr)+g(w_,c,sr)
+            pass
+    allf=rows+cols
+    vals=[g(w_,f,sr) for f in allf]
+    vals=np.array(vals)/ (np.sum(np.abs(w_))+1e-9)
+    j=np.argmax(vals)
+    res.append((allf[j], vals[j], e))
+res2=[r for r in res if r[2]>50]
+from collections import Counter
+print(Counter([r[0] for r in res2]).most_common(20))
+EOF
+[17] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=44100
+d=np.frombuffer(w.readframes(n),dtype='<i2').reshape(-1,2)
+a=d[:,0].astype(np.float64); b=d[:,1].astype(np.float64)
+print('corr', np.corrcoef(a,b)[0,1])
+diff=a-b
+print('diff rms', np.sqrt(np.mean(diff**2)))
+# cross correlation small lag
+for lag in range(-5,6):
+    if lag>=0:
+        c=np.corrcoef(a[lag:],b[:len(b)-lag])[0,1]
+    else:
+        c=np.corrcoef(a[:lag],b[-lag:])[0,1]
+    print(lag, c)
+EOF
+[18] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=44100
+d=np.frombuffer(w.readframes(n),dtype='<i2').reshape(-1,2)
+x=d[:,0].astype(np.float64)
+# First 1 second spectrogram data printed at low time resolution
+N=2048
+X=np.abs(np.fft.rfft(x[:N*20].reshape(20,N)*np.hanning(N),axis=1))
+f=np.fft.rfftfreq(N,1/sr)
+np.set_printoptions(linewidth=250, precision=0, suppress=True)
+# print top freq per frame
+for i in range(20):
+    fi=np.argsort(X[i])[-6:][::-1]
+    print(i, [(round(f[j],0), round(X[i][j],0)) for j in fi])
+print('freq res', f[1])
+print('spec first row printed')
+print(X[5][:200])
+EOF
+[19] run_command cd /home/ctfplayer/workspace && timeout 30 pip download --no-deps --dest /tmp/piptest openai-whisper 2>&1 | tail -3; echo EXIT=$?
+[20] run_command cd /home/ctfplayer/workspace && python3 -c "
+data=open('chal.wav','rb').read()
+d=data[44:44+6064208]
+import collections
+c=collections.Counter(d)
+print(sorted(c.items(), key=lambda kv:-kv[1])[:20])
+print('num distinct bytes', len(c))
+"
+[21] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=44100
+d=np.frombuffer(w.readframes(n),dtype='<i2').reshape(-1,2)
+a=d[:,0].astype(np.int64); b=d[:,1].astype(np.int64)
+# check parity relations
+for k in [1,2,3,4]:
+    pa=(a>>(k-1))&1
+    pb=(b>>(k-1))&1
+    print(k, 'xor mean', (pa^pb).mean(), 'eq mean', (pa==pb).mean())
+# check if b is derived from a via some transform
+print('sum', ((a+b)&0xffff).astype(np.uint16)[:20])
+print('a', a[:20])
+print('b', b[:20])
+# check if abs(b) = abs(a) shifted
+EOF
+[22] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=44100
+d=np.frombuffer(w.readframes(n),dtype='<i2').reshape(-1,2)
+a=d[:,0].astype(np.float64); b=d[:,1].astype(np.float64)
+# Which channel contains the melody? compare onsets
+for name,x in [('L',a),('R',b)]:
+    frame=1024
+    E=np.sqrt(np.mean(x[:len(x)//frame*frame].reshape(-1,frame)**2,axis=1))
+    print(name, 'frames>200:', (E>200).sum(), 'max', E.max(), 'mean', E.mean())
+EOF
+[23] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+from scipy import signal
+w=wave.open('chal.wav'); n=w.getnframes(); sr=44100
+d=np.frombuffer(w.readframes(n),dtype='<i2').reshape(-1,2)
+x=d[:,0].astype(np.float64)
+f,t,S=signal.spectrogram(x, fs=sr, nperseg=4096, noverlap=3072, mode='magnitude')
+print(f.shape,t.shape,S.shape)
+# crop to 0-15 kHz
+mask=f<15000
+S=S[mask]; f=f[mask]
+# save as image
+import PIL.Image as Image
+S2=np.log1p(S*10)
+S2=(S2/S2.max()*255).astype(np.uint8)
+Image.fromarray(S2[::-1]).save('spec_py.png')
+# Also print columns of strongest peak freq per time
+peaks=f[np.argmax(S,axis=0)]
+print('peak freqs first 100 frames', np.round(peaks[:100],0))
+EOF
+ls -la spec_py.png
+[24] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=44100
+d=np.frombuffer(w.readframes(n),dtype='<i2').reshape(-1,2)
+a=d[:,0].astype(np.int64); b=d[:,1].astype(np.int64)
+# check relation of a and b to audio events
+frame=4410
+for i in range(0,min(len(a), sr*40), frame):
+    sa=np.sqrt(np.mean(a[i:i+frame].astype(float)**2))
+    sb=np.sqrt(np.mean(b[i:i+frame].astype(float)**2))
+    if sa>100 or sb>100:
+        print(f'{i/sr:6.2f} L={sa:8.1f} R={sb:8.1f}')
+EOF
+[25] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=44100
+d=np.frombuffer(w.readframes(n),dtype='<i2').reshape(-1,2)
+a=d[:,0].astype(np.int64); b=d[:,1].astype(np.int64)
+print('L bit0 frac %.8f'%(((a&1)).mean()))
+print('L bit1 frac %.8f'%(((a>>1)&1).mean()))
+print('R bit0 frac %.8f'%(((b&1)).mean()))
+print('R bit1 frac %.8f'%(((b>>1)&1).mean()))
+# values in right near-silent region
+seg=b[:int(22.6*sr)]
+print('R first region unique', np.unique(seg)[:20], 'count', np.unique(seg).size)
+print('R region rms', np.sqrt(np.mean(seg.astype(float)**2)))
+# distribution of right values overall
+vals,cnt=np.unique(b,return_counts=True)
+print(list(zip(vals,cnt))[:20])
+# per-second rms of right
+for s in range(0,35):
+    x=b[s*sr:(s+1)*sr]
+    if len(x): print(s, 'R rms %.2f'%np.sqrt(np.mean(x.astype(float)**2)), 'L rms %.1f'%np.sqrt(np.mean(a[s*sr:(s+1)*sr].astype(float)**2)))
+EOF
+[26] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=44100
+d=np.frombuffer(w.readframes(n),dtype='<i2').reshape(-1,2)
+b=d[:,1].astype(np.float64)
+seg=b[:int(22.6*sr)]
+print('len', len(seg))
+# spectrum
+N=8192
+X=np.abs(np.fft.rfft(seg[:N*100].reshape(100,N)*np.hanning(N),axis=1))
+f=np.fft.rfftfreq(N,1/sr)
+avg=X.mean(axis=0)
+top=np.argsort(avg)[-20:][::-1]
+print([(round(f[i],1), round(avg[i],1)) for i in top])
+# save amplified
+amp=seg/ max(abs(seg).max(),1) * 30000
+out=wave.open('right_amp.wav','wb'); out.setnchannels(1); out.setsampwidth(2); out.setframerate(sr)
+out.writeframes(amp.astype('<i2').tobytes()); out.close()
+EOF
+ls -la right_amp.wav
+[27] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+from scipy import signal
+w=wave.open('chal.wav'); n=w.getnframes(); sr=44100
+d=np.frombuffer(w.readframes(n),dtype='<i2').reshape(-1,2)
+x=d[:,0].astype(np.float64)
+f,t,S=signal.spectrogram(x, fs=sr, nperseg=8192, noverlap=7168, mode='magnitude')
+mask=(f>100)&(f<8000)
+S=S[mask]; f=f[mask]
+print(S.shape)
+# ASCII render: 200 cols, 60 rows log freq
+import sys
+cols=220; rows=50
+# time bins -> cols
+tb=np.linspace(0,S.shape[1]-1,cols).astype(int)
+# freq log bins
+flog=np.logspace(np.log10(100),np.log10(8000),rows)
+fi=np.searchsorted(f,flog)
+img=np.zeros((rows,cols))
+for j,c in enumerate(tb):
+    for i in range(rows):
+        a=fi[max(0,i-1)]; b=fi[min(rows-1,i+1)]
+        img[i,j]=S[a:b+1, c].max()
+img=np.log1p(img)
+img=(img-img.min())/(img.max()-img.min()+1e-9)
+chars=' .:-=+*#%@'
+for i in range(rows-1,-1,-1):
+    print(''.join(chars[min(9,int(v*9.999))] for v in img[i]))
+EOF
+[28] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+from scipy import signal
+w=wave.open('chal.wav'); n=w.getnframes(); sr=44100
+d=np.frombuffer(w.readframes(n),dtype='<i2').reshape(-1,2)
+a=d[:,0].astype(np.float64); b=d[:,1].astype(np.float64)
+seg=b[:int(22.6*sr)]
+# highpass
+sos=signal.butter(6, 15000, 'hp', fs=sr, output='sos')
+h=signal.sosfiltfilt(sos, seg)
+print('hp rms', np.sqrt(np.mean(h**2)), 'max', np.abs(h).max())
+# envelope in 5ms
+win=220
+env=np.abs(h)
+env=np.convolve(env, np.ones(win)/win, mode='same')
+print('env max', env.max(), 'env mean', env.mean())
+# segments where env > 3*mean
+thr=env.mean()*3
+act=env>thr
+idx=np.flatnonzero(np.diff(act.astype(int))!=0)+1
+segs=[]; prev=0; st=act[0]
+for i in idx:
+    segs.append((prev,i,st)); prev=i; st=act[i]
+segs.append((prev,len(act),st))
+hot=[(s,e) for s,e,st in segs if st]
+print('hot count', len(hot))
+for s,e in hot[:80]:
+    print(f'{s/sr:8.4f} - {e/sr:8.4f}  dur={(e-s)/sr*1000:7.2f}ms max={env[s:e].max():.1f}')
+EOF
+[29] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=44100
+d=np.frombuffer(w.readframes(n),dtype='<i2').reshape(-1,2)
+a=d[:,0].astype(np.float64); b=d[:,1].astype(np.float64)
+# Compare first 1 second of L and R, sample-wise
+print('L[:60]', a[:60].astype(int))
+print('R[:60]', b[:60].astype(int))
+# Check if R is L with some manipulation? no. Check if R is noise with amplitude 3?
+# Check R's distribution
+print('R first 1000 stats', b[:1000].mean(), b[:1000].std(), b[:1000].min(), b[:1000].max())
+print('L first 1000 stats', a[:1000].mean(), a[:1000].std(), a[:1000].min(), a[:1000].max())
+EOF
+[30] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+from scipy import signal
+import PIL.Image as Image
+w=wave.open('chal.wav'); n=w.getnframes(); sr=44100
+d=np.frombuffer(w.readframes(n),dtype='<i2').reshape(-1,2)
+x=(d[:,0].astype(np.float64)+d[:,1].astype(np.float64))/2
+# spectrogram with good time resolution
+for name, nperseg, fmax in [('sp_full',1024,22050),('sp_low',2048,4000),('sp_high',1024,22050)]:
+    f,t,S=signal.spectrogram(x, fs=sr, nperseg=nperseg, noverlap=nperseg*3//4, mode='magnitude')
+    mask=f<=fmax
+    S=S[mask]; ff=f[mask]
+    S=np.log1p(S)
+    S=(S-S.min())/(S.max()-S.min())
+    img=(S[::-1]*255).astype(np.uint8)
+    Image.fromarray(img).save(name+'.png')
+    print(name, img.shape)
+EOF
+ls -la sp_*.png
+[31] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=44100
+d=np.frombuffer(w.readframes(n),dtype='<i2').reshape(-1,2)
+b=d[:,1].astype(np.int64)
+seg=b[:int(22.6*sr)]
+for bit in range(4):
+    bits=((seg>>bit)&1).astype(np.uint8)
+    for msb in [True,False]:
+        ba=np.packbits(bits if msb else bits[::-1])
+        # count printable ASCII in first 200 bytes
+        s=''.join(chr(c) if 32<=c<127 else '.' for c in ba[:200])
+        print(bit, 'msb' if msb else 'lsb', s[:120])
+EOF
+[32] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=44100
+d=np.frombuffer(w.readframes(n),dtype='<i2').reshape(-1,2)
+a=d[:,0].astype(np.int64); b=d[:,1].astype(np.int64)
+# silence region 1.0 - 3.3s
+s,e=int(1.0*sr),int(3.3*sr)
+seg=a[s:e]
+vals,cnt=np.unique(seg,return_counts=True)
+print('unique vals in silent', len(vals), list(zip(vals,cnt))[:40])
+print('rms', np.sqrt(np.mean(seg.astype(float)**2)))
+# LSB stream
+bits=(seg&1).astype(np.uint8)
+print('LSB ones', bits.mean(), 'len', len(bits))
+print('first 400 bits', ''.join(map(str,bits[:400])))
+# check periodicity
+for period in [2,4,8,10,16,100,441]:
+    print(period, np.mean(bits[::period]))
+EOF
+[33] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+from scipy import signal
+w=wave.open('chal.wav'); n=w.getnframes(); sr=44100
+d=np.frombuffer(w.readframes(n),dtype='<i2').reshape(-1,2)
+x=d[:,0].astype(np.float64)
+for (a,b) in [(3.49,4.28),(5.49,6.01),(7.1,7.66),(8.81,9.31),(10.3,10.94),(11.88,12.6)]:
+    seg=x[int(a*sr):int(b*sr)]
+    N=len(seg)
+    X=np.abs(np.fft.rfft(seg*np.hanning(N)))
+    f=np.fft.rfftfreq(N,1/sr)
+    # peak picking on log scale, top 10 local maxima
+    from scipy.signal import find_peaks
+    pk,_=find_peaks(X, height=X.max()*0.05, distance=5)
+    order=pk[np.argsort(X[pk])[::-1][:12]]
+    print(f'{a}-{b}:', [(round(f[i],1), int(X[i])) for i in sorted(order)])
+EOF
+[34] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=44100
+d=np.frombuffer(w.readframes(n),dtype='<i2').reshape(-1,2)
+a=d[:,0].astype(np.int64); b=d[:,1].astype(np.int64)
+raw=np.frombuffer(d.astype('<i2').tobytes(),dtype=np.uint8)
+print('hex first 64 bytes of data:', raw[:64].tobytes().hex())
+# check each channel as bytes
+lr=np.stack([d[:,0].astype('<i2').view(np.uint8).reshape(-1,2), d[:,1].astype('<i2').view(np.uint8).reshape(-1,2)],axis=1).reshape(-1,4)
+print(lr[:16])
+# scan header for hidden data in first samples: print first 200 samples both channels
+print('L', a[:200])
+print('R', b[:200])
+EOF
+[35] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=44100
+d=np.frombuffer(w.readframes(n),dtype='<i2').reshape(-1,2)
+a=d[:,0].astype(np.float64); b=d[:,1].astype(np.float64)
+seg=slice(0,int(22.6*sr))
+print('corr first part', np.corrcoef(a[seg],b[seg])[0,1])
+print('R std', b[seg].std(), 'L std', a[seg].std())
+# check regression
+import numpy.polynomial as P
+c=np.polyfit(a[seg][::7],b[seg][::7],1)
+print('fit b =',c)
+res=b[seg]-np.polyval(c,a[seg])
+print('residual std', res.std())
+# maybe R is a delayed version of L
+from scipy import signal
+ac=signal.correlate(b[seg][::10], a[seg][::10], mode='full')
+lag=(np.argmax(np.abs(ac))-(len(ac)-1)//2)*10
+print('best lag samples', lag, 'value', ac.max())
+print('R is mono? check R within first part vs dither')
+print('R unique', np.unique(b[seg]).size, 'range', b[seg].min(), b[seg].max())
+EOF
+[36] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=44100
+d=np.frombuffer(w.readframes(n),dtype='<i2').reshape(-1,2)
+a=d[:,0].astype(np.int64); b=d[:,1].astype(np.int64)
+diff=np.abs(a-b)
+nz=np.flatnonzero(diff!=0)
+print('first index where equal and stays equal?', nz[-1], nz[-1]/sr)
+# find last differing sample
+print('last diff', nz[-1], nz[-1]/sr, 'total', len(diff))
+# count diffs by second
+for s in range(35):
+    c=((diff[s*sr:(s+1)*sr])!=0).sum()
+    print(s, c)
+EOF
+[37] run_command cd /home/ctfplayer/workspace && binwalk chal.wav 2>&1 | head -40; echo ---; python3 - <<'EOF'
+import re
+data=open('chal.wav','rb').read()
+for sig,name in [(b'PK\x03\x04','zip'),(b'Rar!','rar'),(b'7z\xbc\xaf','7z'),(b'\x89PNG','png'),(b'\xff\xd8\xff','jpg'),(b'ID3','id3'),(b'RIFF','riff'),(b'ustar','tar')]:
+    idx=[m.start() for m in re.finditer(re.escape(sig),data)]
+    print(name, idx[:10], len(idx))
+EOF
+[38] run_command python3 -c "import torch; print(torch.__version__)" 2>&1 | tail -1; pip list 2>/dev/null | wc -l; df -h /home/ctfplayer | tail -1; nproc; free -g | head -2
+[39] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=44100
+d=np.frombuffer(w.readframes(n),dtype='<i2').reshape(-1,2)
+x=d[:,0].astype(np.float64)
+# RMS per 0.1s
+win=int(0.1*sr)
+E=np.sqrt(np.mean(x[:len(x)//win*win].reshape(-1,win)**2,axis=1))
+# print compact bar chart rows of 200 values
+np.set_printoptions(linewidth=250, precision=0, suppress=True)
+print(E[:350])
+EOF
+[40] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+from scipy import signal
+import PIL.Image as Image
+w=wave.open('chal.wav'); n=w.getnframes(); sr=44100
+d=np.frombuffer(w.readframes(n),dtype='<i2').reshape(-1,2)
+r=d[:int(22.6*sr),1].astype(np.float64)
+print('R stats', r.mean(), r.std(), np.percentile(r,[1,25,50,75,99]))
+# spectrum low
+N=4096
+X=np.abs(np.fft.rfft(r[:N*200].reshape(200,N)*np.hanning(N),axis=1))
+f=np.fft.rfftfreq(N,1/sr)
+avg=X.mean(axis=0)
+for lo,hi in [(0,500),(500,1000),(1000,2000),(2000,4000),(4000,8000),(8000,16000),(16000,22050)]:
+    m=(f>=lo)&(f<hi)
+    print(lo,hi,avg[m].mean())
+# spectrogram image of amplified right
+f,t,S=signal.spectrogram(r*1000, fs=sr, nperseg=16384, noverlap=16384-2048, mode='magnitude')
+S=np.log1p(S)
+S=(S-S.min())/(S.max()-S.min())
+Image.fromarray((S[::-1]*255).astype(np.uint8)).save('right_spec.png')
+print(S.shape)
+EOF
+ls -la right_spec.png
+[41] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+from scipy import signal
+w=wave.open('chal.wav'); n=w.getnframes(); sr=44100
+d=np.frombuffer(w.readframes(n),dtype='<i2').reshape(-1,2)
+x=d[:,0].astype(np.float64)
+start=int(22.6*sr)
+seg=x[start:]
+print('len', len(seg), 'rms', np.sqrt(np.mean(seg**2)), 'max', np.abs(seg).max())
+# Save normalized
+out=wave.open('tail.wav','wb'); out.setnchannels(1); out.setsampwidth(2); out.setframerate(sr)
+out.writeframes((seg/np.abs(seg).max()*30000).astype('<i2').tobytes()); out.close()
+# spectrum over whole tail
+N=4096
+X=np.abs(np.fft.rfft(seg[:len(seg)//N*N].reshape(-1,N)*np.hanning(N),axis=1))
+f=np.fft.rfftfreq(N,1/sr)
+avg=X.mean(axis=0)
+top=np.argsort(avg)[-20:][::-1]
+print([(round(f[i],1), round(avg[i],0)) for i in top])
+# energy per 0.1s
+win=int(0.05*sr)
+E=np.sqrt(np.mean(seg[:len(seg)//win*win].reshape(-1,win)**2,axis=1))
+np.set_printoptions(linewidth=250, precision=0, suppress=True)
+print(E)
+EOF
+[42] run_command cd /home/ctfplayer/workspace && timeout 10 curl -sI https://example.com | head -3; echo "net exit $?"
+[42] run_command cd /home/ctfplayer/workspace && tesseract spec_py.png out 2>/dev/null; cat out.txt | head -20; echo ---; tesseract right_spec.png out2 2>/dev/null; cat out2.txt | head -20
+[43] get_findings {}
+[44] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=44100
+d=np.frombuffer(w.readframes(n),dtype='<i2').reshape(-1,2)
+a=d[:,0].astype(np.float64); b=d[:,1].astype(np.float64)
+for (s,e) in [(22.6,31.5),(32,34.4)]:
+    x=a[int(s*sr):int(e*sr)]; y=b[int(s*sr):int(e*sr)]
+    print(s,e,'corr',np.corrcoef(x,y)[0,1],'rmsL',np.sqrt(np.mean(x**2)),'rmsR',np.sqrt(np.mean(y**2)),'std diff',np.std(x-y))
+print('samples 22.6-22.7 L', a[int(22.6*sr):int(22.6*sr)+30].astype(int))
+print('samples 22.6-22.7 R', b[int(22.6*sr):int(22.6*sr)+30].astype(int))
+EOF
+[45] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import re, base64, binascii
+data=open('chal.wav','rb').read()
+# find all printable runs
+runs=re.findall(rb'[ -~]{4,}', data)
+print(len(runs))
+for r in runs[:200]:
+    print(r)
+EOF
+[46] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=44100
+d=np.frombuffer(w.readframes(n),dtype='<i2').reshape(-1,2)
+x=d[:,0].astype(np.float64)
+# detect active segments with 5ms envelope
+win=int(0.005*sr)
+E=np.sqrt(np.mean(x[:len(x)//win*win].reshape(-1,win)**2,axis=1))
+thr=30
+act=E>thr
+idx=np.flatnonzero(np.diff(act.astype(int))!=0)+1
+segs=[]; prev=0; st=act[0]
+for i in idx:
+    segs.append((prev,i,st)); prev=i; st=act[i]
+segs.append((prev,len(act),st))
+# merge gaps < 50 ms
+merged=[]
+for s,e,s_ in segs:
+    if merged and (s-merged[-1][1])<0.05*sr/win and s_==False:
+        pass
+    merged.append([s,e,s_])
+# simpler: keep on-segments with duration>20ms
+on=[(s*win,e*win) for s,e,st in segs if st and (e-s)*win/sr>0.02]
+print('num on segments', len(on))
+notes=[]
+for s,e in on:
+    seg=x[s:e]
+    # autocorrelation fundamental
+    seg=seg-seg.mean()
+    ac=np.correlate(seg,seg,'full')[len(seg)-1:]
+    ac/=ac[0]+1e-9
+    # find first peak after 0.002s
+    lo=int(sr/2000); hi=min(len(ac), int(sr/60))
+    if hi<=lo: continue
+    pk=lo+np.argmax(ac[lo:hi])
+    f0=sr/pk
+    notes.append((s/sr,e/sr,f0,ac[pk]))
+for t in notes:
+    print(f'{t[0]:7.3f}-{t[1]:7.3f} dur={(t[1]-t[0])*1000:6.1f}ms f0={t[2]:8.1f} ac={t[3]:.3f}')
+EOF
+[47] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+from scipy import signal
+import PIL.Image as Image
+w=wave.open('chal.wav'); n=w.getnframes(); sr=44100
+d=np.frombuffer(w.readframes(n),dtype='<i2').reshape(-1,2)
+x=(d[:,0].astype(np.float64))  # left only
+nperseg=2048; noverlap=1536
+f,t,S=signal.spectrogram(x, fs=sr, nperseg=nperseg, noverlap=noverlap, mode='magnitude')
+print(S.shape)
+# AGC: normalize each time column by its median
+med=np.median(S,axis=0,keepdims=True)+1e-9
+S2=S/med
+S2=np.log1p(S2)
+mask=f<16000
+S2=S2[mask]; ff=f[mask]
+S2=(S2-S2.min())/(S2.max()-S2.min())
+Image.fromarray((S2[::-1]*255).astype(np.uint8)).save('agc_spec.png')
+# also crop silent region 1.0-3.4 to bigger resolution
+i0=int(1.0*sr/ (hop:= (nperseg-noverlap)) )
+print('hop',hop)
+Image.fromarray((S2[::-1]*255).astype(np.uint8)).save('agc_spec.png')
+EOF
+ls -la agc_spec.png
+[48] run_command cd /home/ctfplayer/workspace && ffmpeg -v error -i chal.wav -filter_complex "showspectrumpic=s=4000x1000:legend=0:scale=log" -y ff_spec.png && ls -la ff_spec.png
+[49] run_command cd /home/ctfplayer/workspace && timeout 240 pip install -q faster-whisper 2>&1 | tail -3; python3 -c "import faster_whisper; print('ok', faster_whisper.__version__)"
+[50] run_command cd /home/ctfplayer/workspace && timeout 280 python3 - <<'EOF'
+from faster_whisper import WhisperModel
+m=WhisperModel('tiny.en', device='cpu', compute_type='int8', download_root='/home/ctfplayer/workspace/models')
+segs,info=m.transcribe('chal.wav', beam_size=5, language='en', vad_filter=False)
+for s in segs:
+    print(f'[{s.start:6.2f}-{s.end:6.2f}] {s.text}')
+EOF
+[51] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=44100
+d=np.frombuffer(w.readframes(n),dtype='<i2').reshape(-1,2)
+rev=d[::-1].copy()
+out=wave.open('chal_rev.wav','wb'); out.setnchannels(2); out.setsampwidth(2); out.setframerate(sr)
+out.writeframes(rev.tobytes()); out.close()
+EOF
+timeout 280 python3 - <<'EOF'
+from faster_whisper import WhisperModel
+m=WhisperModel('tiny.en', device='cpu', compute_type='int8', download_root='/home/ctfplayer/workspace/models')
+for f in ['chal_rev.wav']:
+    print('==',f)
+    segs,info=m.transcribe(f, beam_size=5, language='en', vad_filter=False)
+    for s in segs:
+        print(f'[{s.start:6.2f}-{s.end:6.2f}] {s.text}')
+EOF
+[52] run_command cd /home/ctfplayer/workspace && timeout 290 python3 - <<'EOF'
+from faster_whisper import WhisperModel
+m=WhisperModel('small.en', device='cpu', compute_type='int8', download_root='/home/ctfplayer/workspace/models')
+segs,info=m.transcribe('chal_rev.wav', beam_size=5, language='en', vad_filter=False, condition_on_previous_text=False)
+for s in segs:
+    print(f'[{s.start:6.2f}-{s.end:6.2f}] {s.text}')
+EOF
+[53] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal_rev.wav'); n=w.getnframes(); sr=44100
+d=np.frombuffer(w.readframes(n),dtype='<i2').reshape(-1,2)
+x=d[:,0].astype(np.float64)
+win=int(0.005*sr)
+E=np.sqrt(np.mean(x[:len(x)//win*win].reshape(-1,win)**2,axis=1))
+thr=15
+act=E>thr
+idx=np.flatnonzero(np.diff(act.astype(int))!=0)+1
+segs=[]; prev=0; st=act[0]
+for i in idx:
+    segs.append((prev,i,st)); prev=i; st=act[i]
+segs.append((prev,len(act),st))
+print('segments:', len(segs))
+for s,e,st in segs:
+    dur=(e-s)*win/sr
+    print(('ON ' if st else 'off'), f'{s*win/sr:8.3f}-{e*win/sr:8.3f} dur={dur:7.3f} rms={E[s:e].max():8.1f}')
+EOF
+[54] run_command cd /home/ctfplayer/workspace && timeout 280 python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=44100
+d=np.frombuffer(w.readframes(n),dtype='<i2').reshape(-1,2)
+x=d[:,0].astype(np.float64)
+# beeps region 22.6-24.2 in original
+s,e=int(22.60*sr), int(24.20*sr)
+seg=x[s:e]
+N=len(seg)
+X=np.abs(np.fft.rfft(seg*np.hanning(N)))
+f=np.fft.rfftfreq(N,1/sr)
+top=np.argsort(X)[-15:][::-1]
+print('peak freqs 22.6-24.2:', [(round(f[i],2), round(X[i]/1e3,0)) for i in top])
+EOF
+[55] run_command cd /home/ctfplayer/workspace && timeout 290 python3 - <<'EOF'
+from faster_whisper import WhisperModel
+m=WhisperModel('medium.en', device='cpu', compute_type='int8', download_root='/home/ctfplayer/workspace/models', cpu_threads=16)
+segs,info=m.transcribe('chal_rev.wav', beam_size=5, language='en', vad_filter=False, condition_on_previous_text=False, word_timestamps=True)
+for s in segs:
+    print(f'[{s.start:6.2f}-{s.end:6.2f}] {s.text}')
+    for wd in s.words:
+        print(f'    {wd.start:6.2f}-{wd.end:6.2f} {wd.word!r} p={wd.probability:.2f}')
+EOF
+[56] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+from scipy import signal
+w=wave.open('chal.wav'); n=w.getnframes(); sr=44100
+d=np.frombuffer(w.readframes(n),dtype='<i2').reshape(-1,2)
+x=d[:,0].astype(np.float64)
+# speech region original 3.3-22.6 (left)
+seg=x[int(3.3*sr):int(22.6*sr)]
+rev=seg[::-1]
+# denoise: spectral gating with noise estimate from low energy frames
+f,t,Z=signal.stft(rev, fs=sr, nperseg=1024, noverlap=768)
+mag=np.abs(Z)
+noise=np.percentile(mag,10,axis=1,keepdims=True)
+g=np.clip(1-(noise/ (mag+1e-12))**1.5, 0.05, 1)
+Z2=Z*g
+_,clean=signal.istft(Z2, fs=sr, nperseg=1024, noverlap=768)
+clean=clean[:len(rev)]
+clean=clean/np.abs(clean).max()*30000
+out=wave.open('speech_rev_clean.wav','wb'); out.setnchannels(1); out.setsampwidth(2); out.setframerate(sr)
+out.writeframes(clean.astype('<i2').tobytes()); out.close()
+# also plain reversed
+revn=rev/np.abs(rev).max()*30000
+out=wave.open('speech_rev.wav','wb'); out.setnchannels(1); out.setsampwidth(2); out.setframerate(sr)
+out.writeframes(revn.astype('<i2').tobytes()); out.close()
+print('done', len(clean))
+EOF
+ls -la speech_rev*.wav
+[57] run_command cd /home/ctfplayer/workspace && timeout 240 pip install -q "numpy<2" "scipy==1.13.1" 2>&1 | tail -3; python3 -c "import numpy, scipy; print(numpy.__version__, scipy.__version__)"
+[58] run_command cd /home/ctfplayer/workspace && python3 -c "import numpy; print('numpy', numpy.__version__, numpy.__file__)"; python3 -c "import scipy; print('scipy', scipy.__version__, scipy.__file__)" 2>&1 | tail -2; pip download --no-deps --dest /tmp/x scipy==1.13.1 2>&1 | tail -2
+[59] run_command cd /home/ctfplayer/workspace && python3 -m venv venv 2>/dev/null && ./venv/bin/pip install -q numpy scipy soundfile faster-whisper 2>&1 | tail -3 && ./venv/bin/python -c "import numpy,scipy,soundfile;print(numpy.__version__,scipy.__version__)"
+[60] run_command cd /home/ctfplayer/workspace && ./venv/bin/python - <<'EOF'
+import numpy as np, soundfile as sf
+from scipy import signal
+x, sr = sf.read('chal.wav', dtype='int16')
+x = x[:,0].astype(np.float64)
+seg=x[int(3.3*sr):int(22.6*sr)]
+rev=seg[::-1]
+# Reconstruct the reversal: the reversed speech is the reversal of the original
+# Clean with spectral gating
+f,t,Z=signal.stft(rev, fs=sr, nperseg=1024, noverlap=768)
+mag=np.abs(Z)
+noise=np.percentile(mag,5,axis=1,keepdims=True)
+g=np.clip(1-(noise/(mag+1e-12))**2, 0.02, 1)
+Z2=Z*g
+_,clean=signal.istft(Z2, fs=sr, nperseg=1024, noverlap=768)
+clean=clean[:len(rev)]
+sf.write('speech_rev_clean.wav', (clean/np.abs(clean).max()).astype(np.float32), sr)
+sf.write('speech_rev.wav', (rev/np.abs(rev).max()).astype(np.float32), sr)
+print('ok', len(clean))
+EOF
+ls -la speech_rev*.wav
+[61] run_command cd /home/ctfplayer/workspace && ./venv/bin/python - <<'EOF'
+from faster_whisper import WhisperModel
+import sys
+m=WhisperModel('small.en', device='cpu', compute_type='int8', download_root='/home/ctfplayer/workspace/models', cpu_threads=16)
+for f in ['speech_rev.wav','speech_rev_clean.wav']:
+    print('===', f)
+    segs,_=m.transcribe(f, beam_size=5, language='en', vad_filter=False, condition_on_previous_text=False)
+    for s in segs:
+        print(f'[{s.start:6.2f}-{s.end:6.2f}] {s.text}')
+EOF
+[66] run_command cd /home/ctfplayer/workspace && ./venv/bin/python - <<'EOF'
+import numpy as np, soundfile as sf
+x, sr = sf.read('chal.wav', dtype='int16')
+x = x.astype(np.float64)
+L, R = x[:,0], x[:,1]
+print('sr', sr, 'len', len(L))
+tail = L[int(22.6*sr):]
+print('tail len', len(tail), 'rms', np.sqrt(np.mean(tail**2)))
+# per 10ms: rms and peak freq via goertzel over a set of candidate freqs
+win=int(0.01*sr)
+hop=int(0.01*sr)
+N=len(tail)//hop
+frames=[tail[i*hop:(i+1)*hop] for i in range(N)]
+def peakfreq(fr, fmin=200, fmax=3000):
+    fr=fr-fr.mean()
+    n=len(fr)
+    X=np.abs(np.fft.rfft(fr*np.hanning(n), n=8192))
+    f=np.fft.rfftfreq(8192, 1/sr)
+    m=(f>=fmin)&(f<=fmax)
+    Xm=X.copy(); Xm[~m]=0
+    i=np.argmax(Xm)
+    return f[i], Xm[i]
+rows=[]
+for i,fr in enumerate(frames):
+    rms=np.sqrt(np.mean(fr**2))
+    f_,v=peakfreq(fr)
+    rows.append((i*hop/sr+22.6, rms, f_, v))
+# print compact: rms and peak freq, every 10 ms for first 3 s of tail
+for r in rows[:300]:
+    print(f'{r[0]:7.3f} rms={r[1]:7.1f} pk={r[2]:7.1f} val={r[3]:8.0f}')
+EOF
+finished: aborted reason=aborted rounds=67 cost=$0.0489 transcript=C:\Users\Dingus\csaw26_llm_ctf\logs\evals\20261109-214412__eval\09__12345678\lane-3\20261109-222740__misc_12345678_main_deepseek_deepseek-v4_1-flash.json

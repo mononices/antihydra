@@ -633,7 +633,7 @@ class Agent:
 
     def recent_activity(self, limit: int = 6) -> list[str]:
         """Most recent tool calls with short observation previews."""
-        return list(self._recent_activity)[-max(int(limit), 1):]
+        return list(self._recent_activity)[-max(int(limit), 1) :]
 
     @staticmethod
     def _worker_handoff(task: str, result: RunResult, worker: "Agent") -> str:

@@ -1,0 +1,534 @@
+[01] run_command ls -la /home/ctfplayer/ctf_files/ /home/ctfplayer/ctf_files/dist/ 2>/dev/null; file /home/ctfplayer/ctf_files/dist/* 2>/dev/null; cat /tools.txt | head -50
+[02] run_command cd /home/ctfplayer/ctf_files/dist; xxd scrambled | head -50; echo ---; strings -n 6 scrambled; echo ---; binwalk scrambled 2>/dev/null
+[03] run_command cd /home/ctfplayer/ctf_files/dist; wc -c scrambled; strings -n 4 scrambled | cat -A | head -80
+[04] run_command cd /home/ctfplayer/ctf_files/dist; python3 - <<'EOF'
+data=open('scrambled','rb').read()
+print(len(data))
+# find ascii strings offsets
+import re
+for m in re.finditer(rb'[ -~]{4,}', data):
+    print(hex(m.start()), m.group())
+# entropy
+from collections import Counter
+c=Counter(data)
+import math
+H=-sum(v/len(data)*math.log2(v/len(data)) for v in c.values())
+print('entropy',H, 'distinct', len(c))
+# repeating 8-byte blocks
+blocks=[data[i:i+8] for i in range(0,len(data)-7,8)]
+from collections import Counter as C2
+cc=C2(blocks)
+print('dups', [(b.hex(),n) for b,n in cc.items() if n>1])
+EOF
+[05] run_command cd /home/ctfplayer/ctf_files/dist; xxd scrambled | tail -20; echo ---; python3 - <<'EOF'
+import base64,re
+data=open('scrambled','rb').read()
+print(len(data))
+m=re.search(rb'[A-Za-z0-9+/=]{16,}',data)
+print(hex(m.start()), m.end(), m.group(), base64.b64decode(m.group()))
+# block freq
+from collections import Counter
+blocks=[data[i:i+8] for i in range(0,len(data)-7,8)]
+cc=Counter(blocks)
+print('num blocks', len(blocks), 'distinct', len(cc))
+for b,n in cc.most_common(10):
+    print(b.hex(), n)
+print('tail bytes', data[-12:].hex())
+EOF
+[10] run_command cd /home/ctfplayer/ctf_files/dist; python3 - <<'EOF'
+from collections import Counter
+data=open('scrambled','rb').read()
+n=len(data)
+# positions of repeated block 7b66b3caa4baae7c
+blk=bytes.fromhex('7b66b3caa4baae7c')
+pos=[i for i in range(n-7) if data[i:i+8]==blk]
+print('positions of repeated block:', pos, [p%8 for p in pos])
+# column analysis mod 8
+for r in range(8):
+    col=[data[i] for i in range(r,n,8)]
+    c=Counter(col)
+    print(r, len(col), c.most_common(4))
+EOF
+[13] run_command cd /home/ctfplayer/ctf_files/dist; python3 - <<'EOF'
+data=open('scrambled','rb').read()
+n=len(data)
+blk=bytes.fromhex('7b66b3caa4baae7c')
+print([i for i in range(n-7) if data[i:i+8]==blk])
+# try stream cipher: keystream = data XOR known plaintext at end? instead compare data against itself shifted
+# check whether repeated-block structure appears in 16-byte blocks too
+from collections import Counter
+for bs in (4,8,16,32,64):
+    blocks=[data[i:i+bs] for i in range(0,n-bs+1,bs)]
+    c=Counter(blocks)
+    print(bs, len(blocks), len(c), c.most_common(3)[:1])
+EOF
+python3 -c "print(hex(672), hex(768), hex(856), hex(912), hex(1920), hex(2840), hex(2928), hex(3256), hex(3544))"
+[14] run_command cd /home/ctfplayer/ctf_files/dist; python3 - <<'EOF'
+data=open('scrambled','rb').read()
+n=len(data)
+blk=bytes.fromhex('7b66b3caa4baae7c')
+pos=[i for i in range(n-7) if data[i:i+8]==blk]
+# print context around each occurrence
+for p in pos:
+    s=max(0,p-16); e=min(n,p+24)
+    print(hex(p), data[s:e].hex())
+EOF
+[16] run_command python3 -c "import Crypto; print(Crypto.__version__)" 2>&1; python3 -c "from Crypto.Cipher import DES; print('des ok')" 2>&1; openssl version
+[17] run_command cd /home/ctfplayer/ctf_files/dist; python3 - <<'EOF'
+h="ff988a2b2a0f7310bb85abdeea7f7c2482c767ab7edc8d409e3045fb1fb8e19d18afc7b44d7b1882037715b37a117b62"
+print(len(h), len(h)//2, len(h)%16)
+data=open('scrambled','rb').read()
+# check XOR-with-period hypothesis: distribution of data[i]^data[i+p]
+from collections import Counter
+for p in [1,2,4,8,16,32,64,128,256,512]:
+    c=Counter(data[i]^data[i+p] for i in range(len(data)-p))
+    zero=c[0]
+    small=sum(v for k,v in c.items() if k<0x20)
+    print(p, 'zero',zero, 'small',small, 'distinct',len(c))
+EOF
+[18] run_command mkdir -p /home/ctfplayer/workspace && cd /home/ctfplayer/workspace && python3 - <<'EOF'
+from Crypto.Cipher import DES
+data=open('/home/ctfplayer/ctf_files/dist/scrambled','rb').read()
+first=data[:8]
+print('first block', first.hex())
+# candidate keys
+cands=[]
+for c in range(256):
+    cands.append(bytes([c])*8)
+for s in [b'tiny',b'DES',b'des',b'echoes',b'Echoes',b'echo',b'probe',b'cookbook',b'electronic',b'ecb',b'ECB',b'csaw',b'csawctf',b'password',b'12345678',b'\x00'*8,b'\xff'*8,b'01234567',b'abcdefgh']:
+    cands.append(s[:8].ljust(8,b'\x00'))
+    cands.append(s[:8].ljust(8,b' '))
+    cands.append(s[:8].ljust(8,b'\xff'))
+    cands.append((s*8)[:8])
+seen=set()
+for k in cands:
+    if k in seen: continue
+    seen.add(k)
+    try:
+        c=DES.new(k, DES.MODE_ECB)
+        pt=c.decrypt(data[:16])
+    except Exception as e:
+        continue
+    if pt[:4] in (b'\x7fELF',) or pt[:4]==b'\x7fELF' or all(32<=b<127 for b in pt) or pt[:2]==b'MZ':
+        print('HIT', k, pt.hex(), pt)
+print('done candidates', len(seen))
+EOF
+[20] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+from Crypto.Cipher import DES
+data=open('/home/ctfplayer/ctf_files/dist/scrambled','rb').read()
+n=len(data)
+def dec_ecb(k):
+    return DES.new(k, DES.MODE_ECB).decrypt(data)
+def score(pt):
+    # ELF header check plus printable ratio
+    if pt[:4]==b'\x7fELF': return 1000
+    pr=sum(1 for b in pt if 32<=b<127 or b in (9,10,13))/len(pt)
+    return pr
+best=[]
+seen=set()
+import itertools, string
+words=['tiny','des','DES','Echoes','echoes','echo','probe','cookbook','electronic','ecb','ECB','csaw','csawctf','password','12345678','01234567','abcdefgh','scrambled','scramble','orbit','earth','archive','dorsey','bricked','radiation','reversing','bots','clanker','defenses','software','chirping','protocol','response','contact','parking','interstellar','spark','plugs','shiny','corporate','probe','sniffed','sniff','scraping','scrape','dud','old','thought','last','week','made','first','been','same','shot','matter','doesnt','doesn','t','the','and','for','you','know']
+for w in words:
+    for base in [w, w.upper(), w.lower(), w.capitalize()]:
+        for pad in [b'\x00',b' ',b'_',b'\xff',b'0']:
+            k=(base.encode()*8)[:8]
+            if pad!=b'\x00':
+                k=base.encode()[:8].ljust(8,pad)
+            if k in seen: continue
+            seen.add(k)
+            pt=dec_ecb(k)
+            s=score(pt)
+            best.append((s,k,pt[:32]))
+best.sort(reverse=True)
+for s,k,pt in best[:5]:
+    print(s,k,pt.hex(),pt)
+EOF
+[21] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+from Crypto.Cipher import DES
+data=open('/home/ctfplayer/ctf_files/dist/scrambled','rb').read()
+n=len(data)
+body=data[:n-(n%8)]
+def dec_ecb(k):
+    return DES.new(k, DES.MODE_ECB).decrypt(body)
+def score(pt):
+    if pt[:4]==b'\x7fELF': return 1000
+    pr=sum(1 for b in pt if 32<=b<127 or b in (9,10,13))/len(pt)
+    return pr
+best=[]
+seen=set()
+words=['tiny','des','DES','Echoes','echoes','echo','probe','cookbook','electronic','ecb','ECB','csaw','csawctf','password','12345678','01234567','abcdefgh','scrambled','scramble','orbit','earth','archive','dorsey','bricked','radiation','reversing','bots','clanker','defenses','software','chirping','protocol','response','contact','parking','interstellar','spark','plugs','shiny','corporate','sniffed','sniff','scraping','scrape','dud','old','thought','last','week','made','first','been','same','shot','matter','doesnt','the','and','for','you','know','ECHOES','Tiny','TINY']
+for w in words:
+    bases=[w, w.upper(), w.lower(), w.capitalize()]
+    for base in bases:
+        for pad in [b'\x00',b' ',b'_',b'\xff',b'0',b'!']:
+            k=(base.encode()*8)[:8]
+            if pad!=b'\x00':
+                k=base.encode()[:8].ljust(8,pad)
+            if k in seen: continue
+            seen.add(k)
+            pt=dec_ecb(k)
+            s=score(pt)
+            best.append((s,k,pt[:32]))
+best.sort(reverse=True)
+for s,k,pt in best[:8]:
+    print(round(s,3),k,pt.hex(),pt)
+EOF
+[22] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+from Crypto.Cipher import DES
+import base64, itertools
+data=open('/home/ctfplayer/ctf_files/dist/scrambled','rb').read()
+body=data[:len(data)-(len(data)%8)]
+resp=bytes.fromhex("ff988a2b2a0f7310bb85abdeea7f7c2482c767ab7edc8d409e3045fb1fb8e19d18afc7b44d7b1882037715b37a117b62")
+hint=base64.b64decode(b'ZWxlY3Ryb25pYyBjb29rYm9vaw==')
+print('hint:', hint, len(hint))
+cands=set()
+base_strings=[hint, b'electronic', b'cookbook', b'electronic cookbook', b'electroniccookbook', b'ECB', b'ecb', b'des', b'DES', b'tiny', b'TinyDES', b'tinydes', b'echoes', b'Echoes', b'echo', b'csaw', b'csawctf', b'probe', b'dorsey', b'Dorsey', b'twitter', b'Twitter', b'archive', b'parking orbit']
+for s in base_strings:
+    for x in [s, s.upper(), s.lower(), s.capitalize()]:
+        for L in [8]:
+            if len(x)>=L:
+                cands.add(x[:L])
+                cands.add(x[-L:])
+            else:
+                for pad in [b'\x00', b' ', b'_', b'\xff']:
+                    cands.add(x.ljust(L,pad))
+    # hashes
+    import hashlib
+    cands.add(hashlib.md5(s).digest()[:8])
+    cands.add(hashlib.sha256(s).digest()[:8])
+    cands.add(hashlib.sha1(s).digest()[:8])
+# also all key bytes from hex of the response? no
+for k in sorted(cands):
+    try:
+        c=DES.new(k, DES.MODE_ECB)
+    except Exception:
+        continue
+    pt=c.decrypt(body)
+    if pt[:4]==b'\x7fELF' or pt[:2]==b'MZ':
+        print('FILE HIT', k, pt[:8])
+    try:
+        rp=c.decrypt(resp)
+        if all(32<=b<127 for b in rp):
+            print('RESP printable', k, rp)
+    except Exception: pass
+print('tried', len(cands))
+EOF
+[23] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+from Crypto.Cipher import DES
+data=open('/home/ctfplayer/ctf_files/dist/scrambled','rb').read()
+body=data[:len(data)-(len(data)%8)]
+# Hypothesis: file is DES ECB encrypted, key derived from "electronic cookbook" via some transform.
+# Test: maybe key = first 8 bytes of base64 string itself
+keys=[b'ZWxlY3Ry', b'b25pYyBj', b'b29rYm9v', b'aw==', b'ZWxlY3Ryb25pYyBjb29rYm9vaw==', b'cookbook', b'COOKBOOK']
+for k in set(keys):
+    kk=k[:8].ljust(8,b'\x00')
+    pt=DES.new(kk, DES.MODE_ECB).decrypt(body)
+    print(k, kk, pt[:16].hex(), pt[:16])
+EOF
+[24] run_command 
+[26] create_file 
+[27] run_command mkdir -p /home/ctfplayer/workspace && cd /home/ctfplayer/workspace && python3 -c "import base64,sys; open('sdes.py','wb').write(base64.b64decode(sys.argv[1]))" "$(python3 - <<'PY'
+import base64
+code = r'''P10=[3,5,2,7,4,10,1,9,8,6]
+P8=[6,3,7,4,8,5,10,9]
+P4=[2,4,3,1]
+IP=[2,6,3,1,4,8,5,7]
+IPINV=[4,1,3,5,7,2,8,6]
+EP=[4,1,2,3,2,3,4,1]
+S0=[[1,0,3,2],[3,2,1,0],[0,2,1,3],[3,1,3,2]]
+S1=[[0,1,2,3],[2,0,1,3],[3,0,1,0],[2,1,0,3]]
+
+def perm(bits,table): return [bits[i-1] for i in table]
+def tobits(x,n): return [(x>>(n-1-i))&1 for i in range(n)]
+def frombits(b): 
+    v=0
+    for x in b: v=(v<<1)|x
+    return v
+def ls(bits,n): return bits[n:]+bits[:n]
+def rowcol(b4,order=0):
+    if order==0: return ((b4[0]<<1)|b4[3],(b4[1]<<1)|b4[2])
+    return ((b4[1]<<1)|b4[2],(b4[0]<<1)|b4[3])
+def sbox(b4,box,order=0):
+    r,c=rowcol(b4,order); return tobits(box[r][c],2)
+def subkeys(key10,sh2=2):
+    k=perm(tobits(key10,10),P10); l,r=k[:5],k[5:]
+    l,r=ls(l,1),ls(r,1); k1=perm(l+r,P8)
+    l,r=ls(l,sh2),ls(r,sh2); k2=perm(l+r,P8)
+    return k1,k2
+def F(r4,sk,order=0):
+    e=perm(r4,EP); x=[a^b for a,b in zip(e,sk)]
+    s0=sbox(x[:4],S0,order); s1=sbox(x[4:],S1,order)
+    return perm(s0+s1,P4)
+def enc_block(pt,key10,order=0,rounds=2):
+    k1,k2=subkeys(key10)
+    b=perm(tobits(pt,8),IP); l,r=b[:4],b[4:]
+    l,r=r,[a^b for a,b in zip(l,F(r,k1,order))]
+    l,r=r,[a^b for a,b in zip(l,F(r,k2,order))]
+    if rounds==1: pass
+    return frombits(perm(l+r,IPINV))
+def dec_block(ct,key10,order=0):
+    k1,k2=subkeys(key10)
+    b=perm(tobits(ct,8),IP); l,r=b[:4],b[4:]
+    l,r=r,[a^b for a,b in zip(l,F(r,k2,order))]
+    l,r=r,[a^b for a,b in zip(l,F(r,k1,order))]
+    return frombits(perm(l+r,IPINV))
+'''
+open('/tmp/x','w').write(code)
+import base64
+print(base64.b64encode(code.encode()).decode())
+PY
+)" && ls -la sdes.py && python3 -c "
+import sdes
+print(hex(sdes.enc_block(0b10001011, 0b0111111101)), sdes.dec_block(sdes.enc_block(0b10001011,0b0111111101),0b0111111101)==0b10001011)"
+[28] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import sdes
+k=0b0111111101
+bad=0
+for x in range(256):
+    c=sdes.enc_block(x,k)
+    d=sdes.dec_block(c,k)
+    if d!=x: bad+=1
+print('bad',bad)
+print('enc(0x8b)=',hex(sdes.enc_block(0b10001011,k)))
+EOF
+[29] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import sdes
+k=0b0111111101
+print('enc(10111101)=',bin(sdes.enc_block(0b10111101,k)))
+print('subkeys', sdes.subkeys(k))
+# debug round trip manually
+pt=0b10001011
+k1,k2=sdes.subkeys(k)
+b=sdes.perm(sdes.tobits(pt,8),sdes.IP); l,r=b[:4],b[4:]
+print('IP',b)
+f=sdes.F(r,k1); print('F(r,k1)',f)
+l2=[a^b_ for a,b_ in zip(l,f)]
+print('after r1', l2, r)
+l3,r3=r,l2
+f2=sdes.F(r3,k2); print('F(r3,k2)',f2)
+l4=[a^b_ for a,b_ in zip(l3,f2)]
+print('after r2', l4, r3)
+ct=sdes.frombits(sdes.perm(l4+r3,sdes.IPINV))
+print('ct',bin(ct))
+# decrypt
+b=sdes.perm(sdes.tobits(ct,8),sdes.IP); L,R=b[:4],b[4:]
+f=sdes.F(R,k2); L2=[a^b_ for a,b_ in zip(L,f)]
+print('dec after r1', L2, R)
+L3,R3=R,L2
+f=sdes.F(R3,k1); L4=[a^b_ for a,b_ in zip(L3,f)]
+print('dec after r2', L4, R3)
+pt2=sdes.frombits(sdes.perm(L4+R3,sdes.IPINV))
+print('pt2',bin(pt2))
+EOF
+[30] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import re
+src=open('sdes.py').read()
+src=src.replace("""    l,r=r,[a^b for a,b in zip(l,F(r,k2,order))]
+    if rounds==1: pass
+    return frombits(perm(l+r,IPINV))""","""    l,r=r,[a^b for a,b in zip(l,F(r,k2,order))]
+    return frombits(perm(r+l,IPINV))""")
+src=src.replace("""    l,r=r,[a^b for a,b in zip(l,F(r,k1,order))]
+    return frombits(perm(l+r,IPINV))""","""    l,r=r,[a^b for a,b in zip(l,F(r,k1,order))]
+    return frombits(perm(r+l,IPINV))""")
+open('sdes.py','w').write(src)
+EOF
+cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import sdes
+k=0b0111111101
+bad=sum(1 for x in range(256) if sdes.dec_block(sdes.enc_block(x,k),k)!=x)
+print('bad',bad)
+# Known S-DES test vector: key=0111111101, pt=10111101 -> ct=10111011? Let's check both orders
+print(hex(sdes.enc_block(0b10111101,k)))
+EOF
+[31] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import itertools, sdes
+data=open('/home/ctfplayer/ctf_files/dist/scrambled','rb').read()
+target=[0x7f,0x45,0x4c,0x46]
+# variants: sbox order (0/1), shift2 amount (2), output order
+def make_dec(order, sh2, outorder):
+    def dec(ct,key10):
+        k1,k2=sdes.subkeys(key10,sh2)
+        b=sdes.perm(sdes.tobits(ct,8),sdes.IP); l,r=b[:4],b[4:]
+        l,r=r,[a^b for a,b in zip(l,sdes.F(r,k2,order))]
+        l,r=r,[a^b for a,b in zip(l,sdes.F(r,k1,order))]
+        return sdes.frombits(sdes.perm((l+r) if outorder==0 else (r+l),sdes.IPINV))
+    return dec
+hits=[]
+for order in (0,1):
+    for sh2 in (1,2):
+        for outorder in (0,1):
+            dec=make_dec(order,sh2,outorder)
+            for key in range(1024):
+                ok=all(dec(data[i],key)==target[i] for i in range(4))
+                if ok:
+                    hits.append((order,sh2,outorder,key))
+print(hits)
+EOF
+[32] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import sdes
+data=open('/home/ctfplayer/ctf_files/dist/scrambled','rb').read()
+def dec_all(key,order=0,sh2=2,outorder=1):
+    out=bytearray()
+    for b in data:
+        k1,k2=sdes.subkeys(key,sh2)
+        bits=sdes.perm(sdes.tobits(b,8),sdes.IP); l,r=bits[:4],bits[4:]
+        l,r=r,[a^b_ for a,b_ in zip(l,sdes.F(r,k2,order))]
+        l,r=r,[a^b_ for a,b_ in zip(l,sdes.F(r,k1,order))]
+        out.append(sdes.frombits(sdes.perm((l+r) if outorder==0 else (r+l),sdes.IPINV)))
+    return bytes(out)
+res=[]
+for order in (0,1):
+    for sh2 in (1,2):
+        for outorder in (0,1):
+            for key in range(1024):
+                pt=dec_all(key,order,sh2,outorder)
+                if pt[:4]==b'\x7fELF' or pt[:2]==b'MZ' or pt[:5]==b'#!/bi':
+                    print('HIT',order,sh2,outorder,key,pt[:16])
+                pr=sum(1 for b in pt if 32<=b<127 or b in (9,10,13))/len(pt)
+                res.append((pr,order,sh2,outorder,key))
+res.sort(reverse=True)
+print(res[:5])
+EOF
+[34] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+# faster: precompute all 1024*256 mappings once
+import sdes
+data=open('/home/ctfplayer/ctf_files/dist/scrambled','rb').read()
+def decblock(b,key,order=0,sh2=2,outorder=1):
+    k1,k2=sdes.subkeys(key,sh2)
+    bits=sdes.perm(sdes.tobits(b,8),sdes.IP); l,r=bits[:4],bits[4:]
+    l,r=r,[a^b_ for a,b_ in zip(l,sdes.F(r,k2,order))]
+    l,r=r,[a^b_ for a,b_ in zip(l,sdes.F(r,k1,order))]
+    return sdes.frombits(sdes.perm((l+r) if outorder==0 else (r+l),sdes.IPINV))
+res=[]
+for order in (0,1):
+  for sh2 in (1,2):
+    for outorder in (0,1):
+      for key in range(1024):
+        if decblock(data[0],key,order,sh2,outorder)==0x7f and decblock(data[1],key,order,sh2,outorder)==0x45:
+            print('HIT',order,sh2,outorder,key)
+print('done')
+EOF
+[35] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+# Full brute force but only first two bytes, all variants including different IP tables? First check: is data[0] a valid ciphertext at all?
+import sdes
+data=open('/home/ctfplayer/ctf_files/dist/scrambled','rb').read()
+# Check bijectivity of decblock over all keys: collect set of outputs for data[0]
+outs=set()
+for key in range(1024):
+    outs.add(sdes.dec_block(data[0],key))
+print(len(outs))
+# check whether 0x7f is achievable
+print(0x7f in outs, 0x45 in outs)
+# maybe the file is encrypted in 8-byte blocks with a 10-bit key: check if any key gives ELF for first 4 bytes with reversed bit order in byte
+def rev8(x): return int('{:08b}'.format(x)[::-1],2)
+outs2=set()
+for key in range(1024):
+    outs2.add(sdes.dec_block(rev8(data[0]),key))
+print(0x7f in outs2)
+EOF
+[36] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import sdes
+data=open('/home/ctfplayer/ctf_files/dist/scrambled','rb').read()
+# 232 distinct outputs means key->output mapping not injective over 256 outputs: S-DES with 10-bit key maps 8-bit block, outputs 256 max.
+# Find keys giving 0x7f for data[0]
+ks=[k for k in range(1024) if sdes.dec_block(data[0],k)==0x7f]
+print('keys for 0x7f:',ks[:20], len(ks))
+ks2=[k for k in range(1024) if sdes.dec_block(data[1],k)==0x45]
+print('keys for 0x45:',ks2[:20], len(ks2))
+print('intersection', set(ks)&set(ks2))
+# maybe byte order in 16-bit words swapped? try data[1] then data[0]
+ks3=[k for k in range(1024) if sdes.dec_block(data[1],k)==0x7f]
+print('keys for 0x7f on byte1:', ks3[:10], len(ks3))
+print('inter', set(ks3)&set(ks2))
+EOF
+[37] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+# Maybe each byte is encrypted with a different key (key schedule per byte) or 16-bit blocks.
+# Consider: file encrypted with DES but key unknown; or XOR with repeating key.
+data=open('/home/ctfplayer/ctf_files/dist/scrambled','rb').read()
+# Test: if it's XOR with 96-byte key (matching response length 96), then data[i]^data[i+96] etc.
+# Actually let's test whether scrambled = XOR of something with the response repeated
+resp=bytes.fromhex("ff988a2b2a0f7310bb85abdeea7f7c2482c767ab7edc8d409e3045fb1fb8e19d18afc7b44d7b1882037715b37a117b62")
+for off in range(len(data)-96):
+    x=bytes(a^b for a,b in zip(data[off:off+96], resp))
+    pr=sum(1 for b in x if 32<=b<127 or b in (9,10,13))/96
+    if pr>0.9:
+        print(off, pr, x[:60])
+print('done')
+EOF
+[38] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+data=open('/home/ctfplayer/ctf_files/dist/scrambled','rb').read()
+n=len(data)
+# check bit-level autocorrelation / periodicity
+import numpy as np
+bits=np.unpackbits(np.frombuffer(data,dtype=np.uint8))
+print(len(bits))
+# find period p maximizing matches
+best=[]
+for p in range(1,2000):
+    a=bits[:-p]; b=bits[p:]
+    m=(a==b).mean()
+    best.append((m,p))
+best.sort(reverse=True)
+print(best[:10])
+EOF
+[39] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+data=open('/home/ctfplayer/ctf_files/dist/scrambled','rb').read()
+n=len(data)
+# Check whether repeated 8-byte block positions are multiples of 8 (yes) and whether the block at those positions could be a null block in plaintext (e.g., spaces or zeros).
+# Test hypothesis: plaintext contains many 8-byte blocks of identical content (e.g., padding), and cipher is ECB DES with unknown key -> identical plaintext blocks -> identical ct blocks.
+# If so, the repeated ct block = encryption of some common plaintext block. Also, positions of repeats in a text file would be like newlines etc.
+# Try: is the file a text file (e.g., base64 or hex) encrypted with ECB? Check plaintext guess: all spaces (0x20*8) or zeros.
+from Crypto.Cipher import DES
+# brute force key such that DES_enc(key, b' '*8) == repeated block? That's a 56-bit search - no.
+# Instead: check for 2-byte repeats pattern to identify ECB with 8-byte blocks: repeated 8-byte ct blocks occur at multiples of 8 -> consistent.
+# Let's check the distribution of distinct 8-byte blocks: 519 distinct of 558. For random data, expect ~558*557/2/2^64 collisions = 0 -> so repeats are meaningful.
+# Repeated blocks likely correspond to repeated plaintext blocks. In a source file, common 8-byte blocks: lots of zeros? Let's think about what file this is: "scrambled" is 4470 bytes = 558.75 blocks.
+# Hmm 4470 = 8*558 + 6. Not multiple of 8! So ECB DES impossible unless padding/partial.
+# 4470 = 2*3*5*149. 
+print(4470/16, 4470/8)
+# Check if the file might be an image or archive with different block size: 4470 = 6*745 = 2*2235
+# Let's look at the tail: ends with base64 and \n. So the file is likely a text file (script?) encrypted with a stream cipher, and the base64 hint was appended in plaintext.
+# If the file is a script with plaintext base64 at the end, then maybe the cipher is a stream cipher keyed by something, and the plaintext has known structure.
+# Actually maybe the "scrambled" file is the Reversing Bot's output: a binary that was scrambled by XORing with a keystream. The base64 hint at the end is plaintext.
+# Let's test: if plaintext ends with "...==\n" and ciphertext ends with "...aw==\n" then those bytes are unencrypted? The last 25 bytes are ASCII base64 + \n. So the file has a plaintext tail.
+print(data[-30:])
+EOF
+[40] run_command cd /home/ctfplayer/workspace && timeout 280 python3 - <<'EOF'
+import sdes
+data=open('/home/ctfplayer/ctf_files/dist/scrambled','rb').read()
+
+def make_map(key,order,sh2,swap,outorder,inv=False):
+    m=bytearray(256)
+    for b in range(256):
+        k1,k2=sdes.subkeys(key,sh2)
+        if inv:
+            k1,k2=k2,k1
+        bits=sdes.perm(sdes.tobits(b,8),sdes.IP); l,r=bits[:4],bits[4:]
+        if swap: l,r=r,l
+        l,r=r,[a^c for a,c in zip(l,sdes.F(r,k1,order))]
+        l,r=r,[a^c for a,c in zip(l,sdes.F(r,k2,order))]
+        if swap: l,r=r,l
+        m[b]=sdes.frombits(sdes.perm((l+r) if outorder==0 else (r+l),sdes.IPINV))
+    return bytes(m)
+
+def score(pt):
+    pr=sum(1 for b in pt if 32<=b<127 or b in (9,10,13,0))
+    # english-ish bonus for letters/space
+    letters=sum(1 for b in pt if b in b' etaoinshrdluETAIOSHRDLU(){}_=:#\'"')
+    return pr + letters
+
+res=[]
+for order in (0,1):
+  for sh2 in (1,2):
+    for swap in (0,1):
+      for outorder in (0,1):
+        for inv in (0,1):
+          for key in range(1024):
+            m=make_map(key,order,sh2,swap,outorder,inv)
+            pt=bytes(m[b] for b in data[:400])
+            res.append((score(pt),order,sh2,swap,outorder,inv,key))
+res.sort(reverse=True)
+for r in res[:10]:
+    print(r)
+EOF
+finished: aborted reason=aborted rounds=40 cost=$0.0938 transcript=C:\Users\Dingus\csaw26_llm_ctf\logs\evals\20261109-220311__eval\01__Echoes-of-DES-tiny\lane-3\20261109-221838__crypto_Echoes-of-DES-tiny_main_deepseek_deepseek-v4_1-flash.json

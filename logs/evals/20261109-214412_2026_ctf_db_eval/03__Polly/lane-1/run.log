@@ -1,0 +1,1119 @@
+[01] run_command ls -la /home/ctfplayer/ctf_files/ && cat /home/ctfplayer/ctf_files/player/main.py && cat /home/ctfplayer/ctf_files/player/requirements.txt
+[02] run_command ls -la /home/ctfplayer && cat /tools.txt
+[03] run_command cd /home/ctfplayer/workspace && (printf '1\nAAAA\n2\nBBBB\n0\nCCCC\n'; sleep 3) | timeout 20 nc polly.chal.csaw.io 5000 | head -c 3000 | cat -A | head -50
+[07] create_file {"path": "/home/ctfplayer/workspace/solver.py", "content": "#!/usr/bin/env python3\n\"\"\"\nPolly solver.\n\nServer: ChaCha20 with nonce = base_nonce(9) || low24(state_at(x, seed)).\nstate_at is GF(2)-linear in seed.  We recover the 64-bit seed from the\nlow 24 bits of state_at(x, seed) for chosen x, then decrypt the flag.\n\"\"\"\nimport re\nimport sys\nimport socket\nimport time\n\nMASK64 = (1 << 64) - 1\nNEED = 160          # equations wanted (24 per x)\nPROMPT = b\"which seed modifier\"\n\n\ndef recv_until(sock, marker, timeout=30):\n    sock.settimeout(timeout)\n    buf = b\"\"\n    end = time.time() + timeout\n    while marker not in buf:\n        if time.time() > end:\n            raise RuntimeError(\"timeout waiting for %r; got %r\" % (marker, buf[-200:]))\n        d = sock.recv(4096)\n        if not d:\n            raise RuntimeError(\"EOF waiting for %r; got %r\" % (marker, buf[-200:]))\n        buf += d\n    return buf\n\n\ndef gf2_solve(rows, rhs, ncols):\n    \"\"\"Solve GF(2) system rows*x = rhs (rows = list of ints, bit i = col i).\"\"\"\n    piv = {}\n    for r, b in zip(rows, rhs):\n        cur, curb = r, b\n        for bit in range(ncols):\n            if not (cur >> bit) & 1:\n                continue\n            if bit in piv:\n                pr, pb = piv[bit]\n                cur ^= pr\n                curb ^= pb\n            else:\n                piv[bit] = (cur, curb)\n                break\n        else:\n            if curb & 1:\n                raise ValueError(\"inconsistent system\")\n    if len(piv) < ncols:\n        raise ValueError(\"underdetermined: %d/%d pivots\" % (len(piv), ncols))\n    x = 0\n    for bit in range(ncols):\n        if bit in piv:\n            r, b = piv[bit]\n            # row is in reduced form only if we normalized; do full reduction\n            pass\n    # back-substitute: reduce rows fully\n    # (simple approach: gaussian elimination with full reduction)\n    rows2 = [(r, b) for r, b in piv.values()]\n    # order by pivot\n    by_pivot = {}\n    for r, b in rows2:\n        p = (r & -r).bit_length() - 1\n        by_pivot[p] = (r, b)\n    x = 0\n    for p in sorted(by_pivot.keys(), reverse=True):\n        r, b = by_pivot[p]\n        val = b ^ (bin(r & x).count(\"1\") & 1)\n        if val:\n            x |= 1 << p\n    return x\n\n\ndef collect_and_solve(host, port, verbose=True):\n    s = socket.create_connection((host, port), timeout=30)\n    banner = recv_until(s, b\"perhaps\")\n    m = re.search(rb\"encrypted flag is ([0-9a-f]+), the nonce is ([0-9a-f]+)\", banner)\n    flag_ct = bytes.fromhex(m.group(1).decode())\n    nonce0 = bytes.fromhex(m.group(2).decode())\n    if verbose:\n        print(\"[*] flag ct len=%d nonce0=%s\" % (len(flag_ct), nonce0.hex()))\n\n    rows, rhs = [], []\n    xs = []\n    x = 1\n    while len(rows) < NEED:\n        xs.append(x)\n        s.sendall(b\"%d\\n\" % x)\n        data = recv_until(s, b\"nonce byte is\")\n        data += s.recv(16)\n        mb = re.search(rb\"nonce byte is: ([0-9a-f]{2})\", data)\n        b = int(mb.group(1), 16)\n        for bit in range(8):\n            rows.append(x)\n            rhs.append((b >> bit) & 1)\n        x += 1\n    if verbose:\n        print(\"[*] collected %d equations from %d queries\" % (len(rows), len(xs)))\n\n    seed = gf2_solve(rows, rhs, 64)\n    if verbose:\n        print(\"[+] seed = %d (0x%016x)\" % (seed, seed))\n    s.close()\n    return flag_ct, nonce0, seed\n\n\nif __name__ == \"__main__\":\n    host = sys.argv[1] if len(sys.argv) > 1 else \"polll.chal.csaw.io\"\n    port = int(sys.argv[2]) if len(sys.argv) > 2 else 5000\n    flag_ct, nonce0, seed = collect_and_solve(host, port)\n    print(\"FLAGCT\", flag_ct.hex())\n    print(\"NONCE0\", nonce0.hex())\n    print(\"SEED\", seed)\n"}
+[07] create_file {"path": "/home/ctfplayer/workspace/local_test.sh", "content": "#!/bin/bash\n# local mock server for validating the solver\ncd /home/ctfplayer/ctf_files/player\nFLAG='csaw{test_flag_abcdefg}' FLAG2='csaw{test_flag_abcdefg}' python3 main.py\n"}
+[08] run_command cd /home/ctfplayer/workspace && FLAG='csaw{test_flag_abcdefg}' FLAG2='csaw{test_flag_abcdefg}' nohup python3 /home/ctfplayer/ctf_files/player/main.py > server.log 2>&1 &
+sleep 3; cat server.log | head -5
+[09] run_command cd /home/ctfplayer/workspace && (FLAG='csaw{test_flag_abcdefg}' FLAG2='csaw{test_flag_abcdefg}' nohup python3 /home/ctfplayer/ctf_files/player/main.py > /home/ctfplayer/workspace/server.log 2>&1 &) ; sleep 3; cat /home/ctfplayer/workspace/server.log | head -5; pgrep -af "main.py"
+[10] run_command cd /home/ctfplayer/workspace && (FLAG='csaw{test_flag_abcdefg}' FLAG2='csaw{test_flag_abcdefg}' nohup socat TCP-LISTEN:5555,reuseaddr,fork EXEC:"python3 /home/ctfplayer/ctf_files/player/main.py" > socat.log 2>&1 &) ; sleep 2; python3 solver.py 127.0.0.1 5555
+[11] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import socket, time
+s = socket.create_connection(("127.0.0.1", 5555), timeout=10)
+time.sleep(0.5)
+print(repr(s.recv(4096)))
+s.sendall(b"1\n")
+time.sleep(0.5)
+try:
+    print(repr(s.recv(4096)))
+except Exception as e:
+    print("ERR", e)
+s.sendall(b"2\n")
+time.sleep(0.5)
+try:
+    print(repr(s.recv(4096)))
+except Exception as e:
+    print("ERR", e)
+EOF
+[12] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import re
+src = open('solver.py').read()
+old = """        s.sendall(b"%d\\n" % x)
+        data = recv_until(s, b"nonce byte is")
+        data += s.recv(16)"""
+new = """        s.sendall(b"%d\\n" % x)
+        recv_until(s, b"encrypt:")
+        s.sendall(b"A\\n")
+        data = recv_until(s, b"nonce byte is")
+        data += s.recv(16)"""
+assert old in src
+open('solver.py','w').write(src.replace(old, new))
+print("patched")
+EOF
+python3 solver.py 127.0.0.1 5555
+[13] run_command cd /home/ctfplayer/workspace && grep -n "encrypt" solver.py | head; echo ---; sed -n '85,100p' solver.py
+[14] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+src = open('solver.py').read()
+src = src.replace('recv_until(s, b"encrypt:")', 'recv_until(s, b"enter a string")')
+open('solver.py','w').write(src)
+print("ok")
+EOF
+python3 solver.py 127.0.0.1 5555
+[15] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+src = open('solver.py').read()
+src = src.replace('        data += s.recv(16)\n', '')
+open('solver.py','w').write(src)
+print("ok")
+EOF
+python3 solver.py 127.0.0.1 5555
+[16] run_command cat -n /home/ctfplayer/ctf_files/player/main.py
+[18] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import importlib.util, os
+os.environ['FLAG']='csaw{test}'
+spec = importlib.util.spec_from_file_location("m", "/home/ctfplayer/ctf_files/player/main.py")
+m = importlib.util.module_from_spec(spec)
+try:
+    spec.loader.exec_module(m)   # will block on stdin? it prints banner then loops on stdin
+except Exception as e:
+    print("exec stopped:", e)
+print("shifts", m.shifts, "num", m.num)
+for x in [1,2,3,4,5]:
+    row = 0
+    for j in range(64):
+        if m.state_at(x, 1<<j) & 1:
+            row |= 1<<j
+    st = m.state_at(x, 0x0123456789abcdef)
+    pred = m.state_at(x,1) & 0xFFFFFF
+    print(x, hex(row & 0xFFFFFF), hex(st & 0xFFFFFF))
+EOF
+[20] create_file {"path": "/home/ctfplayer/workspace/rows.py", "content": "\"\"\"Compute the GF(2) matrix rows for state_at(x, .) restricted to the low 24 bits,\ngiven base_nonce (from the banner). rows[x] is a 64-bit int: bit j set means\nseed bit j contributes to the low-24-bit output.\"\"\"\n\nMASK64 = (1 << 64) - 1\n\n\ndef _transform(state, num, shifts):\n    if num % 2 == 0:\n        state ^= (state << shifts[0]) & MASK64\n        state ^= state >> shifts[1]\n        state ^= (state << shifts[2]) & MASK64\n        state ^= state >> shifts[3]\n    else:\n        state ^= state >> shifts[0]\n        state ^= (state << shifts[1]) & MASK64\n        state ^= state >> shifts[2]\n        state ^= (state << shifts[3]) & MASK64\n    return state & MASK64\n\n\ndef _transformation(operator, state):\n    result = 0\n    for bit in range(64):\n        if state & (1 << bit):\n            result ^= operator[bit]\n    return result & MASK64\n\n\ndef _square_operator(operator):\n    return [_transformation(operator, column) for column in operator]\n\n\ndef build_params(base_nonce):\n    from hashlib import shake_256\n    material = shake_256(base_nonce).digest(5)\n    available_shifts = list(range(1, 64))\n    shifts = []\n    for byte in material[1:]:\n        index = byte % len(available_shifts)\n        shifts.append(available_shifts.pop(index))\n    num = material[0] & 1\n    return shifts, num\n\n\ndef build_rows(base_nonce):\n    shifts, num = build_params(base_nonce)\n    first_jump = [_transform(1 << bit, num, shifts) for bit in range(64)]\n    jumps = [first_jump]\n    for _ in range(63):\n        jumps.append(_square_operator(jumps[-1]))\n\n    def state_at(x, seed):\n        state = seed & MASK64\n        for bit in range(64):\n            if x & (1 << bit):\n                state = _transformation(jumps[bit], state)\n        return state\n\n    rows = {}\n    for x in range(1, 200):\n        row = 0\n        for j in range(64):\n            if state_at(x, 1 << j) & 1:\n                row |= 1 << j\n        rows[x] = row\n    return rows\n"}
+[21] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import re
+src = open('solver.py').read()
+
+src = src.replace('NEED = 160          # equations wanted (24 per x)',
+                  'NEED = 160          # equations wanted (8 per x)')
+
+old = """    rows, rhs = [], []
+    xs = []
+    x = 1
+    while len(rows) < NEED:
+        xs.append(x)
+        s.sendall(b"%d\\n" % x)
+        recv_until(s, b"enter a string")
+        s.sendall(b"A\\n")
+        data = recv_until(s, b"nonce byte is")
+        mb = re.search(rb"nonce byte is: ([0-9a-f]{2})", data)
+        b = int(mb.group(1), 16)
+        for bit in range(8):
+            rows.append(x)
+            rhs.append((b >> bit) & 1)
+        x += 1"""
+new = """    rows, rhs = [], []
+    xs = []
+    x = 1
+    from rows import build_rows
+    table = build_rows(nonce0[:9])
+    while len(rows) < NEED:
+        xs.append(x)
+        s.sendall(b"%d\\n" % x)
+        recv_until(s, b"enter a string")
+        s.sendall(b"A\\n")
+        data = recv_until(s, b"nonce byte is")
+        mb = re.search(rb"nonce byte is: ([0-9a-f]{2})", data)
+        b = int(mb.group(1), 16)
+        for bit in range(8):
+            rows.append(table[x])
+            rhs.append((b >> bit) & 1)
+        x += 1"""
+assert old in src
+src = src.replace(old, new)
+open('solver.py','w').write(src)
+print("patched")
+EOF
+python3 solver.py 127.0.0.1 5555
+[22] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+src = open('solver.py').read()
+assert 'if curb & 1:' in src
+src = src.replace('if curb & 1:', 'if curb:')
+open('solver.py','w').write(src)
+print("ok")
+EOF
+python3 solver.py 127.0.0.1 5555
+[23] create_file {"path": "/home/ctfplayer/workspace/solve_local.py", "content": "\"\"\"End-to-end sanity check: simulate the server locally, recover seed, decrypt flag.\"\"\"\nimport os\nfrom hashlib import shake_256\nfrom Crypto.Cipher import ChaCha20\nfrom rows import build_rows\nfrom solver import gf2_solve\n\nflag = b\"csaw{local_test_flag}\"\n\nkey = os.urandom(32)\nbase_nonce = os.urandom(9)\nseed_true = secrets_seed = int.from_bytes(os.urandom(8), \"big\") or 1\n\nshifts = []\nmaterial = shake_256(base_nonce).digest(5)\navailable_shifts = list(range(1, 64))\nfor byte in material[1:]:\n    index = byte % len(available_shifts)\n    shifts.append(available_shifts.pop(index))\nnum = material[0] & 1\n\nMASK64 = (1 << 64) - 1\n\n\ndef transform(state, num):\n    if num % 2 == 0:\n        state ^= (state << shifts[0]) & MASK64\n        state ^= state >> shifts[1]\n        state ^= (state << shifts[2]) & MASK64\n        state ^= state >> shifts[3]\n    else:\n        state ^= state >> shifts[0]\n        state ^= (state << shifts[1]) & MASK64\n        state ^= state >> shifts[2]\n        state ^= (state << shifts[3]) & MASK64\n    return state & MASK64\n\n\ndef transformation(operator, state):\n    result = 0\n    for bit in range(64):\n        if state & (1 << bit):\n            result ^= operator[bit]\n    return result & MASK64\n\n\ndef square_operator(operator):\n    return [transformation(operator, column) for column in operator]\n\n\nfirst_jump = [transform(1 << bit, num) for bit in range(64)]\njumps = [first_jump]\nfor _ in range(63):\n    jumps.append(square_operator(jumps[-1]))\n\n\ndef state_at(x, seed):\n    state = seed & MASK64\n    for bit in range(64):\n        if x & (1 << bit):\n            state = transformation(jumps[bit], state)\n    return state\n\n\nflag_x = int.from_bytes(os.urandom(8), \"big\")\nstate = state_at(flag_x, seed_true)\nnonce = base_nonce + (state & 0xFFFFFF).to_bytes(3, \"big\")\nct = ChaCha20.new(key=key, nonce=nonce).encrypt(flag)\nprint(\"true seed:\", seed_true)\n\ntable = build_rows(base_nonce)\nrows, rhs = [], []\nx = 1\nwhile len(rows) < 160:\n    out = state_at(x, seed_true) & 0xFFFFFF\n    for bit in range(8):\n        rows.append(table[x])\n        rhs.append((out >> bit) & 1)\n    x += 1\nseed = gf2_solve(rows, rhs, 64)\nprint(\"recovered:\", seed, \"match:\", seed == seed_true)\n\nif seed == seed_true:\n    rec = ChaCha20.new(key=key, nonce=nonce).decrypt(ct)\n    print(\"decrypted:\", rec)\n"}
+[23] run_command cd /home/ctfplayer/workspace && python3 solve_local.py
+[24] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import os
+from solve_local import state_at, table, seed_true
+
+# check: does table[x] (as bit-mask over seed bits) reproduce state_at(x, seed) low 24 bits?
+seed = seed_true
+for x in [1,2,3,5,17,63,100]:
+    row = 0
+    for j in range(64):
+        if (seed >> j) & 1:
+            row ^= table[x] & (1 << j) if False else (1 << j)
+    # proper: row-vector times seed
+    val = 0
+    for j in range(64):
+        if (seed >> j) & 1:
+            val ^= table[x] if False else 0
+    # correct linear combination: sum_j s_j * (table[x] bit j)  -> but table[x] is a mask of seed bits
+    # i.e. out = XOR over j where s_j=1 of (bit j of table[x])?? No:
+    # out_bit_k = XOR_j M[x][k][j] s_j ; table[x] bit j = column j = sum_k M[x][k][j] 2^k
+    # So out = XOR_j s_j * col_j where col_j is the 24-bit column. table[x] packs columns.
+    colbits = table[x]
+    out_pred = 0
+    for k in range(24):
+        bit = 0
+        for j in range(64):
+            if ((seed >> j) & 1) and ((colbits >> j) & 1) and ((colbits >> j) & 1):
+                pass
+        # column j contributes to bit k iff bit k of col j is set
+    # compute properly:
+    out_pred = 0
+    for k in range(24):
+        acc = 0
+        for j in range(64):
+            if ((seed >> j) & 1) and ((colbits >> j) & 1):
+                pass
+        out_pred |= 0
+    print("x=%d true=%06x" % (x, state_at(x, seed) & 0xFFFFFF))
+EOF
+[25] create_file {"path": "/home/ctfplayer/workspace/verify_lin.py", "content": "\"\"\"Verify the column-packing assumption: is table[x] really the packed columns\nof the GF(2) matrix M[x] acting on seed bits?\"\"\"\nimport os\nfrom hashlib import shake_256\nfrom rows import build_rows\n\nMASK64 = (1 << 64) - 1\nbase_nonce = os.urandom(9)\n\nshifts = []\nmaterial = shake_256(base_nonce).digest(5)\navailable_shifts = list(range(1, 64))\nfor byte in material[1:]:\n    index = byte % len(available_shifts)\n    shifts.append(available_shifts.pop(index))\nnum = material[0] & 1\n\n\ndef transform(state, num):\n    if num % 2 == 0:\n        state ^= (state << shifts[0]) & MASK64\n        state ^= state >> shifts[1]\n        state ^= (state << shifts[2]) & MASK64\n        state ^= state >> shifts[3]\n    else:\n        state ^= state >> shifts[0]\n        state ^= (state << shifts[1]) & MASK64\n        state ^= state >> shifts[2]\n        state ^= (state << shifts[3]) & MASK64\n    return state & MASK64\n\n\ndef transformation(operator, state):\n    result = 0\n    for bit in range(64):\n        if state & (1 << bit):\n            result ^= operator[bit]\n    return result & MASK64\n\n\ndef square_operator(operator):\n    return [transformation(operator, column) for column in operator]\n\n\nfirst_jump = [transform(1 << bit, num) for bit in range(64)]\njumps = [first_jump]\nfor _ in range(63):\n    jumps.append(square_operator(jumps[-1]))\n\n\ndef state_at(x, seed):\n    state = seed & MASK64\n    for bit in range(64):\n        if x & (1 << bit):\n            state = transformation(jumps[bit], state)\n    return state\n\n\ntable = build_rows(base_nonce)\n\n# direct check: state_at(x, e_j) low24 should equal the column for seed bit j.\n# column packing: table[x] bit j = ??? Let's test both interpretations.\nseed = int.from_bytes(os.urandom(8), \"big\") or 1\n\nfor x in [1, 2, 3, 5, 17, 100]:\n    true_out = state_at(x, seed) & 0xFFFFFF\n    colbits = table[x]\n    # interpretation A: out = XOR_j s_j * (24-bit value whose bits are (col_j >> k))\n    #   where col_j = bits of table[x] at position j -- but that's just one bit.\n    # proper column extraction: col_j is the 24-bit column vector for seed bit j.\n    # We built table[x] by setting bit j iff state_at(x, 1<<j) & 1 -- that's only\n    # the LSB of the output. Test interpretation B: out bit k = XOR_j s_j * (bit k\n    # of state_at(x, 1<<j)) -- need full columns, so recompute here:\n    out = 0\n    for k in range(24):\n        acc = 0\n        for j in range(64):\n            if (seed >> j) & 1:\n                if (state_at(x, 1 << j) >> k) & 1:\n                    acc ^= 1\n        out |= acc << k\n    print(\"x=%3d true=%06x recomputed=%06x match=%s table_lsb=%06x\" %\n          (x, true_out, out, true_out == out, colbits & 0xFFFFFF))\n"}
+[25] run_command cd /home/ctfplayer/workspace && python3 verify_lin.py
+[26] create_file {"path": "/home/ctfplayer/workspace/rows.py", "content": "\"\"\"Build the GF(2) matrix for state_at(x, .) restricted to low 24 bits,\ngiven base_nonce (recovered from the banner).\n\nFor each x, cols[x] = [c_0..c_63] (24-bit ints) such that\n    out = state_at(x, seed) & 0xFFFFFF = XOR_{j: seed_j = 1} c_j\ni.e. c_j = state_at(x, 1 << j) & 0xFFFFFF.\n\"\"\"\n\nMASK64 = (1 << 64) - 1\n\n\ndef _transform(state, num, shifts):\n    if num % 2 == 0:\n        state ^= (state << shifts[0]) & MASK64\n        state ^= state >> shifts[1]\n        state ^= (state << shifts[2]) & MASK64\n        state ^= state >> shifts[3]\n    else:\n        state ^= state >> shifts[0]\n        state ^= (state << shifts[1]) & MASK64\n        state ^= state >> shifts[2]\n        state ^= (state << shifts[3]) & MASK64\n    return state & MASK64\n\n\ndef _transformation(operator, state):\n    result = 0\n    for bit in range(64):\n        if state & (1 << bit):\n            result ^= operator[bit]\n    return result & MASK64\n\n\ndef _square_operator(operator):\n    return [_transformation(operator, column) for column in operator]\n\n\ndef build_params(base_nonce):\n    from hashlib import shake_256\n    material = shake_256(base_nonce).digest(5)\n    available_shifts = list(range(1, 64))\n    shifts = []\n    for byte in material[1:]:\n        index = byte % len(available_shifts)\n        shifts.append(available_shifts.pop(index))\n    num = material[0] & 1\n    return shifts, num\n\n\ndef build_cols(base_nonce, xs=range(1, 200)):\n    shifts, num = build_params(base_nonce)\n    first_jump = [_transform(1 << bit, num, shifts) for bit in range(64)]\n    jumps = [first_jump]\n    for _ in range(63):\n        jumps.append(_square_operator(jumps[-1]))\n\n    def state_at(x, seed):\n        state = seed & MASK64\n        for bit in range(64):\n            if x & (1 << bit):\n                state = _transformation(jumps[bit], state)\n        return state\n\n    cols = {}\n    for x in xs:\n        cols[x] = [state_at(x, 1 << j) & 0xFFFFFF for j in range(64)]\n    return cols\n\n\ndef build_rows(base_nonce, xs=range(1, 200)):\n    \"\"\"Legacy helper: bit j of rows[x] = LSB of column j.\"\"\"\n    cols = build_cols(base_nonce, xs)\n    return {x: sum(((c[0] >> 0) & 1) << j for j, c in enumerate(cc))\n            for x, cc in cols.items()}\n"}
+[26] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+src = open('solver.py').read()
+old_start = src.index('def gf2_solve')
+old_end = src.index('def collect_and_solve')
+new_fn = '''def gf2_solve(rows, rhs, ncols):
+    """Solve GF(2) system rows*x = rhs. rows = list of ints, bit i = coeff of var i.
+    Returns x (int) with ncols bits set."""
+    piv = {}  # pivot bit -> (row, rhsbit); pivot row's lowest set bit == pivot bit
+    for r, b in zip(rows, rhs):
+        cur, curb = r, b
+        while cur:
+            low = cur & -cur
+            bit = low.bit_length() - 1
+            if bit in piv:
+                pr, pb = piv[bit]
+                cur ^= pr
+                curb ^= pb
+            else:
+                piv[bit] = (cur, curb)
+                cur = 0
+        if curb:
+            raise ValueError("inconsistent system")
+    if len(piv) < ncols:
+        raise ValueError("underdetermined: %d/%d pivots" % (len(piv), ncols))
+    x = 0
+    for bit in sorted(piv.keys(), reverse=True):
+        r, b = piv[bit]
+        val = b ^ (bin(r & x).count("1") & 1)
+        if val:
+            x |= 1 << bit
+    return x
+
+
+'''
+src = src[:old_start] + new_fn + src[old_end:]
+
+old = """    rows, rhs = [], []
+    xs = []
+    x = 1
+    from rows import build_rows
+    table = build_rows(nonce0[:9])
+    while len(rows) < NEED:
+        xs.append(x)
+        s.sendall(b"%d\\n" % x)
+        recv_until(s, b"enter a string")
+        s.sendall(b"A\\n")
+        data = recv_until(s, b"nonce byte is")
+        mb = re.search(rb"nonce byte is: ([0-9a-f]{2})", data)
+        b = int(mb.group(1), 16)
+        for bit in range(8):
+            rows.append(table[x])
+            rhs.append((b >> bit) & 1)
+        x += 1"""
+new = """    rows, rhs = [], []
+    xs = []
+    x = 1
+    from rows import build_cols
+    cols = build_cols(nonce0[:9])
+    while len(rows) < NEED:
+        xs.append(x)
+        s.sendall(b"%d\\n" % x)
+        recv_until(s, b"enter a string")
+        s.sendall(b"A\\n")
+        data = recv_until(s, b"nonce byte is")
+        mb = re.search(rb"nonce byte is: ([0-9a-f]{2})", data)
+        out = int(mb.group(1), 16)
+        cc = cols[x]
+        for k in range(8):
+            rows.append(sum(((cc[j] >> k) & 1) << j for j in range(64)))
+            rhs.append((out >> k) & 1)
+        x += 1"""
+assert old in src
+src = src.replace(old, new)
+open('solver.py','w').write(src)
+print("patched")
+EOF
+python3 solve_local.py
+[27] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+src = open('rows.py').read()
+src = src.replace('return {x: sum(((c[0] >> 0) & 1) << j for j, c in enumerate(cc))\n            for x, cc in cols.items()}',
+                  'return {x: sum((c & 1) << j for j, c in enumerate(cc))\n            for x, cc in cols.items()}')
+open('rows.py','w').write(src)
+print("ok")
+EOF
+python3 solve_local.py
+[28] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+# sanity: test gf2_solve on a random consistent system
+import random, sys
+sys.path.insert(0,'.')
+from solver import gf2_solve
+random.seed(1)
+for trial in range(5):
+    x = random.getrandbits(64)
+    rows, rhs = [], []
+    for i in range(120):
+        r = random.getrandbits(64)
+        rows.append(r)
+        rhs.append(bin(r & x).count("1") & 1)
+    try:
+        got = gf2_solve(rows, rhs, 64)
+        print(trial, "ok", got == x)
+    except ValueError as e:
+        print(trial, "FAIL", e)
+EOF
+[29] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+src = open('solver.py').read()
+old = """        else:
+            piv[bit] = (cur, curb)
+            cur = 0
+        if curb:
+            raise ValueError("inconsistent system")"""
+new = """        else:
+            piv[bit] = (cur, curb)
+            break
+    else:
+        if curb:
+            raise ValueError("inconsistent system")"""
+assert old in src
+src = src.replace(old, new)
+open('solver.py','w').write(src)
+print("ok")
+EOF
+python3 - <<'EOF'
+import random, sys
+sys.path.insert(0,'/home/ctfplayer/workspace')
+from solver import gf2_solve
+random.seed(1)
+ok = 0
+for trial in range(5):
+    x = random.getrandbits(64)
+    rows, rhs = [], []
+    for i in range(120):
+        r = random.getrandbits(64)
+        rows.append(r); rhs.append(bin(r & x).count("1") & 1)
+    got = gf2_solve(rows, rhs, 64)
+    ok += (got == x)
+print("gf2_solve trials passed:", ok, "/5")
+EOF
+cd /home/ctfplayer/workspace && python3 solve_local.py
+[30] run_command cd /home/ctfplayer/workspace && sed -n '/def gf2_solve/,/^def collect/p' solver.py
+[31] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+src = open('solver.py').read()
+a = src.index('def gf2_solve')
+b = src.index('def collect_and_solve')
+new_fn = '''def gf2_solve(rows, rhs, ncols):
+    """Solve GF(2) system rows*x = rhs. rows = list of ints, bit i = coeff of var i."""
+    piv = {}  # pivot bit -> (row, rhsbit); pivot row's lowest set bit == pivot bit
+    for r, b in zip(rows, rhs):
+        cur, curb = r, b
+        while cur:
+            bit = (cur & -cur).bit_length() - 1
+            if bit in piv:
+                pr, pb = piv[bit]
+                cur ^= pr
+                curb ^= pb
+            else:
+                piv[bit] = (cur, curb)
+                break
+        else:
+            if curb:
+                raise ValueError("inconsistent system")
+    if len(piv) < ncols:
+        raise ValueError("underdetermined: %d/%d pivots" % (len(piv), ncols))
+    x = 0
+    for bit in sorted(piv.keys(), reverse=True):
+        r, b = piv[bit]
+        val = b ^ (bin(r & x).count("1") & 1)
+        if val:
+            x |= 1 << bit
+    return x
+
+
+'''
+src = src[:a] + new_fn + src[b:]
+open('solver.py','w').write(src)
+print("rewritten")
+EOF
+python3 - <<'EOF'
+import random, sys
+sys.path.insert(0,'/home/ctfplayer/workspace')
+from solver import gf2_solve
+random.seed(1)
+ok = 0
+for trial in range(5):
+    x = random.getrandbits(64)
+    rows, rhs = [], []
+    for i in range(120):
+        r = random.getrandbits(64)
+        rows.append(r); rhs.append(bin(r & x).count("1") & 1)
+    got = gf2_solve(rows, rhs, 64)
+    ok += (got == x)
+print("gf2_solve trials passed:", ok, "/5")
+EOF
+[32] run_command cd /home/ctfplayer/workspace && python3 solve_local.py
+[33] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+src = open('solve_local.py').read()
+old = """table = build_rows(base_nonce)
+rows, rhs = [], []
+x = 1
+while len(rows) < 160:
+    out = state_at(x, seed_true) & 0xFFFFFF
+    for bit in range(8):
+        rows.append(table[x])
+        rhs.append((out >> bit) & 1)
+    x += 1"""
+new = """from rows import build_cols
+cols = build_cols(base_nonce)
+rows, rhs = [], []
+x = 1
+while len(rows) < 160:
+    out = state_at(x, seed_true) & 0xFFFFFF
+    cc = cols[x]
+    for k in range(8):
+        rows.append(sum(((cc[j] >> k) & 1) << j for j in range(64)))
+        rhs.append((out >> k) & 1)
+    x += 1"""
+assert old in src
+src = src.replace(old, new)
+open('solve_local.py','w').write(src)
+print("ok")
+EOF
+python3 solve_local.py
+[34] run_command cd /home/ctfplayer/workspace && python3 solver.py 127.0.0.1 5555
+[35] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+# Check rank of the map seed -> (low24(T^x(seed)) for x=1..N) for various base_nonces
+import os
+from rows import build_params, _transform, _transformation, _square_operator, MASK64
+from hashlib import shake_256
+
+def rank_of_system(base_nonce, nqueries):
+    shifts, num = build_params(base_nonce)
+    first_jump = [_transform(1 << bit, num, shifts) for bit in range(64)]
+    jumps = [first_jump]
+    for _ in range(63):
+        jumps.append(_square_operator(jumps[-1]))
+    def state_at(x, seed):
+        state = seed & MASK64
+        for bit in range(64):
+            if x & (1 << bit):
+                state = _transformation(jumps[bit], state)
+        return state
+    rows = []
+    for x in range(1, nqueries+1):
+        cc = [state_at(x, 1 << j) & 0xFFFFFF for j in range(64)]
+        for k in range(8):
+            rows.append(sum(((cc[j] >> k) & 1) << j for j in range(64)))
+    # gaussian elimination to find rank
+    piv = {}
+    for r in rows:
+        cur = r
+        while cur:
+            bit = (cur & -cur).bit_length() - 1
+            if bit in piv:
+                cur ^= piv[bit]
+            else:
+                piv[bit] = cur
+                break
+    return len(piv)
+
+for trial in range(10):
+    bn = os.urandom(9)
+    r20 = rank_of_system(bn, 20)
+    r40 = rank_of_system(bn, 40)
+    print("nonce=%s rank(20q)=%d rank(40q)=%d" % (bn.hex(), r20, r40))
+EOF
+[36] run_command 
+[37] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import os
+from rows import build_params, _transform, _transformation, _square_operator, MASK64
+
+def analyze(base_nonce, nqueries=25):
+    shifts, num = build_params(base_nonce)
+    first_jump = [_transform(1 << bit, num, shifts) for bit in range(64)]
+    jumps = [first_jump]
+    for _ in range(63):
+        jumps.append(_square_operator(jumps[-1]))
+    def state_at(x, seed):
+        state = seed & MASK64
+        for bit in range(64):
+            if x & (1 << bit):
+                state = _transformation(jumps[bit], state)
+        return state
+    rows = []
+    for x in range(1, nqueries+1):
+        cc = [state_at(x, 1 << j) & 0xFFFFFF for j in range(64)]
+        for k in range(8):
+            rows.append(sum(((cc[j] >> k) & 1) << j for j in range(64)))
+    piv = {}
+    for r in rows:
+        cur = r
+        while cur:
+            bit = (cur & -cur).bit_length() - 1
+            if bit in piv:
+                cur ^= piv[bit]
+            else:
+                piv[bit] = cur
+                break
+    # kernel: bits not pivot columns
+    pivot_cols = set()
+    for p, r in piv.items():
+        # pivot row's lowest set bit is p
+        pass
+    return len(piv), shifts, num
+
+for trial in range(6):
+    bn = os.urandom(9)
+    rank, shifts, num = analyze(bn)
+    print("nonce=%s rank=%d shifts=%s num=%d" % (bn.hex(), rank, shifts, num))
+EOF
+[38] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import os
+from rows import build_params, _transform, _transformation, _square_operator, MASK64
+
+def pivots(base_nonce, nqueries=25):
+    shifts, num = build_params(base_nonce)
+    first_jump = [_transform(1 << bit, num, shifts) for bit in range(64)]
+    jumps = [first_jump]
+    for _ in range(63):
+        jumps.append(_square_operator(jumps[-1]))
+    def state_at(x, seed):
+        state = seed & MASK64
+        for bit in range(64):
+            if x & (1 << bit):
+                state = _transformation(jumps[bit], state)
+        return state
+    rows = []
+    for x in range(1, nqueries+1):
+        cc = [state_at(x, 1 << j) & 0xFFFFFF for j in range(64)]
+        for k in range(8):
+            rows.append(sum(((cc[j] >> k) & 1) << j for j in range(64)))
+    piv = {}
+    for r in rows:
+        cur = r
+        while cur:
+            bit = (cur & -cur).bit_length() - 1
+            if bit in piv:
+                cur ^= piv[bit]
+            else:
+                piv[bit] = cur
+                break
+    return set(piv.keys()), shifts, num
+
+bn = bytes.fromhex('75adc0c4c1bac140eb')
+pivcols, shifts, num = pivots(bn)
+print("rank", len(pivcols), "pivot columns (seed bits used):", sorted(pivcols))
+print("shifts", shifts, "num", num)
+EOF
+[39] run_command cd /home/ctfplayer/workspace && timeout 30 python3 - <<'EOF'
+import socket, time, re
+s = socket.create_connection(("polll.chal.csaw.io", 5000), timeout=20)
+s.settimeout(5)
+buf = b""
+try:
+    while True:
+        d = s.recv(4096)
+        if not d: break
+        buf += d
+        if b"which seed" in buf: break
+except Exception as e:
+    print("stop:", e)
+print(repr(buf))
+EOF
+[40] run_command cd /home/ctfplayer/workspace && timeout 30 python3 - <<'EOF'
+import socket
+s = socket.create_connection(("polly.chal.csaw.io", 5000), timeout=20)
+s.settimeout(5)
+buf = b""
+try:
+    while True:
+        d = s.recv(4096)
+        if not d: break
+        buf += d
+        if b"which seed" in buf: break
+except Exception as e:
+    print("stop:", e)
+print(repr(buf))
+EOF
+[41] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+from hashlib import shake_256
+import os
+bn = bytes.fromhex('f70870a5ba3afa05821710')
+material = shake_256(bn).digest(5)
+available_shifts = list(range(1, 64))
+shifts = []
+for byte in material[1:]:
+    index = byte % len(available_shifts)
+    shifts.append(available_shifts.pop(index))
+num = material[0] & 1
+print("shifts", shifts, "num", num)
+# now compute rank for this instance
+from rows import _transform, _transformation, _square_operator, MASK64
+first_jump = [_transform(1 << bit, num, shifts) for bit in range(64)]
+jumps = [first_jump]
+for _ in range(63):
+    jumps.append(_square_operator(jumps[-1]))
+def state_at(x, seed):
+    state = seed & MASK64
+    for bit in range(64):
+        if x & (1 << bit):
+            state = _transformation(jumps[bit], state)
+    return state
+rows = []
+for x in range(1, 26):
+    cc = [state_at(x, 1 << j) & 0xFFFFFF for j in range(64)]
+    for k in range(8):
+        rows.append(sum(((cc[j] >> k) & 1) << j for j in range(64)))
+piv = {}
+for r in rows:
+    cur = r
+    while cur:
+        bit = (cur & -cur).bit_length() - 1
+        if bit in piv:
+            cur ^= piv[bit]
+        else:
+            piv[bit] = cur
+            break
+print("rank(25 queries):", len(piv))
+print("pivot seed bits:", sorted(piv.keys()))
+EOF
+[42] run_command cd /home/ctfplayer/workspace && timeout 60 python3 - <<'EOF'
+import socket, time, re
+s = socket.create_connection(("polly.chal.csaw.io", 5000), timeout=20)
+s.settimeout(10)
+
+def recv_until(marker, timeout=15):
+    buf = b""
+    end = time.time() + timeout
+    while marker not in buf:
+        if time.time() > end:
+            raise RuntimeError("timeout, got %r" % buf[-200:])
+        d = s.recv(4096)
+        if not d:
+            raise RuntimeError("EOF")
+        buf += d
+    return buf
+
+buf = recv_until(b"which seed")
+m = re.search(rb"encrypted flag is ([0-9a-f]+), the nonce is ([0-9a-f]+)", buf)
+print("flag ct:", m.group(1).decode())
+print("nonce:", m.group(2).decode())
+
+outs = []
+for x in range(1, 26):
+    s.sendall(b"%d\n" % x)
+    recv_until(b"enter a string")
+    s.sendall(b"A\n")
+    data = recv_until(b"nonce byte is")
+    mb = re.search(rb"nonce byte is: ([0-9a-f]{2})", data)
+    outs.append(int(mb.group(1), 16))
+print("outs:", [hex(o) for o in outs])
+s.close()
+
+import json
+json.dump({"nonce": m.group(2).decode(), "flag_ct": m.group(1).decode(), "outs": outs},
+          open("server_data.json","w"))
+print("saved")
+EOF
+[43] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import json
+from rows import build_cols
+from solver import gf2_solve
+
+d = json.load(open("server_data.json"))
+bn = bytes.fromhex(d["nonce"][:18])
+outs = d["outs"]
+cols = build_cols(bn)
+
+rows, rhs = [], []
+for x, out in enumerate(outs, start=1):
+    cc = cols[x]
+    for k in range(8):
+        rows.append(sum(((cc[j] >> k) & 1) << j for j in range(64)))
+        rhs.append((out >> k) & 1)
+
+piv = {}
+for r, b in zip(rows, rhs):
+    cur, curb = r, b
+    while cur:
+        bit = (cur & -cur).bit_length() - 1
+        if bit in piv:
+            pr, pb = piv[bit]
+            cur ^= pr
+            curb ^= pb
+        else:
+            piv[bit] = (cur, curb)
+            break
+print("rank:", len(piv))
+print("pivot seed bits:", sorted(piv.keys()))
+free = [j for j in range(64) if j not in piv]
+print("free bits:", free)
+
+# back-substitute with free bits = 0
+x = 0
+for bit in sorted(piv.keys(), reverse=True):
+    r, b = piv[bit]
+    val = b ^ (bin(r & x).count("1") & 1)
+    if val:
+        x |= 1 << bit
+print("candidate seed:", x, hex(x))
+# verify
+def check(seed):
+    from rows import _transform, _transformation, MASK64
+    from hashlib import shake_256
+    material = shake_256(bn).digest(5)
+    available_shifts = list(range(1, 64)); shifts=[]
+    for byte in material[1:]:
+        index = byte % len(available_shifts); shifts.append(available_shifts.pop(index))
+    num = material[0] & 1
+    first_jump = [_transform(1 << bit, num, shifts) for bit in range(64)]
+    jumps = [first_jump]
+    for _ in range(63):
+        jumps.append(_square_operator(jumps[-1]))
+    def state_at(xx, s):
+        st = s & MASK64
+        for bit in range(64):
+            if xx & (1 << bit):
+                st = _transformation(jumps[bit], st)
+        return st
+    return all((state_at(i, seed) & 0xFFFFFF) == o for i, o in enumerate(outs, start=1))
+
+print("verify:", check(x))
+json.dump({"nonce": d["nonce"], "flag_ct": d["flag_ct"], "seed": x}, open("server_data2.json","w"))
+EOF
+[44] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import json
+from rows import build_cols, _transform, _transformation, _square_operator, MASK64
+from hashlib import shake_256
+from Crypto.Cipher import ChaCha20
+
+d = json.load(open("server_data.json"))
+bn = bytes.fromhex(d["nonce"][:18])
+outs = d["outs"]
+seed = 7693137237032699986
+
+material = shake_256(bn).digest(5)
+available_shifts = list(range(1, 64)); shifts=[]
+for byte in material[1:]:
+    index = byte % len(available_shifts); shifts.append(available_shifts.pop(index))
+num = material[0] & 1
+first_jump = [_transform(1 << bit, num, shifts) for bit in range(64)]
+jumps = [first_jump]
+for _ in range(63):
+    jumps.append(_square_operator(jumps[-1]))
+def state_at(xx, s):
+    st = s & MASK64
+    for bit in range(64):
+        if xx & (1 << bit):
+            st = _transformation(jumps[bit], st)
+    return st
+
+ok = all((state_at(i, seed) & 0xFFFFFF) == o for i, o in enumerate(outs, start=1))
+print("seed verifies against all 25 oracle outputs:", ok)
+
+flag_x = int.from_bytes(bytes.fromhex(d["nonce"][18:34]), "big")
+state = state_at(flag_x, seed)
+nonce = bn + (state & 0xFFFFFF).to_bytes(3, "big")
+ct = bytes.fromhex(d["flag_ct"])
+# key is server-side random; we can't decrypt without it.
+print("flag_x:", flag_x, "state:", hex(state), "nonce:", nonce.hex())
+print("ct:", ct.hex(), "len:", len(ct))
+EOF
+[45] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import json
+from rows import build_cols, _transform, _transformation, _square_operator, MASK64
+from hashlib import shake_256
+
+d = json.load(open("server_data.json"))
+bn = bytes.fromhex(d["nonce"][:18])
+outs = d["outs"]
+seed = 7693137237032699986
+
+material = shake_256(bn).digest(5)
+available_shifts = list(range(1, 64)); shifts=[]
+for byte in material[1:]:
+    index = byte % len(available_shifts); shifts.append(available_shifts.pop(index))
+num = material[0] & 1
+first_jump = [_transform(1 << bit, num, shifts) for bit in range(64)]
+jumps = [first_jump]
+for _ in range(63):
+    jumps.append(_square_operator(jumps[-1]))
+def state_at(xx, s):
+    st = s & MASK64
+    for bit in range(64):
+        if xx & (1 << bit):
+            st = _transformation(jumps[bit], st)
+    return st
+
+for i, o in enumerate(outs, start=1):
+    got = state_at(i, seed) & 0xFFFFFF
+    print("x=%d expected=%06x got=%06x %s" % (i, o, got, "OK" if got==o else "MISMATCH"))
+EOF
+[46] run_command sed -n '55,140p' /home/ctfplayer/ctf_files/player/main.py
+[47] run_command sed -n '140,200p' /home/ctfplayer/ctf_files/player/main.py
+[48] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import json
+from rows import _transform, _transformation, _square_operator, MASK64
+from hashlib import shake_256
+from solver import gf2_solve
+
+d = json.load(open("server_data.json"))
+bn = bytes.fromhex(d["nonce"][:18])
+seed = 7693137237032699986
+target_state = int.from_bytes(bytes.fromhex(d["nonce"][18:]), "big")
+print("target state:", hex(target_state))
+
+material = shake_256(bn).digest(5)
+available_shifts = list(range(1, 64)); shifts=[]
+for byte in material[1:]:
+    index = byte % len(available_shifts); shifts.append(available_shifts.pop(index))
+num = material[0] & 1
+first_jump = [_transform(1 << bit, num, shifts) for bit in range(64)]
+jumps = [first_jump]
+for _ in range(63):
+    jumps.append(_square_operator(jumps[-1]))
+def state_at(xx, s):
+    st = s & MASK64
+    for bit in range(64):
+        if xx & (1 << bit):
+            st = _transformation(jumps[bit], st)
+    return st
+
+# columns of the map x -> low24(state_at(x, seed))
+colv = [state_at(1 << bit, seed) & 0xFFFFFF for bit in range(64)]
+rows, rhs = [], []
+for k in range(24):
+    rows.append(sum(((colv[j] >> k) & 1) << j for j in range(64)))
+    rhs.append((target_state >> k) & 1)
+
+# find ALL solutions (kernel may be nontrivial)
+piv = {}
+for r, b in zip(rows, rhs):
+    cur, curb = r, b
+    while cur:
+        bit = (cur & -cur).bit_length() - 1
+        if bit in piv:
+            pr, pb = piv[bit]
+            cur ^= pr; curb ^= pb
+        else:
+            piv[bit] = (cur, curb); break
+    else:
+        if curb: raise ValueError("inconsistent")
+print("rank:", len(piv))
+free = [j for j in range(64) if j not in piv]
+print("free bits:", free)
+x0 = 0
+for bit in sorted(piv.keys(), reverse=True):
+    r, b = piv[bit]
+    if b ^ (bin(r & x0).count("1") & 1):
+        x0 |= 1 << bit
+print("x0:", x0, hex(x0))
+print("check:", state_at(x0, seed) & 0xFFFFFF == target_state)
+# kernel basis
+kern = []
+for f in free:
+    v = 1 << f
+    for bit in sorted(piv.keys(), reverse=True):
+        r, b = piv[bit]
+        if bin(r & v).count("1") & 1:
+            v |= 1 << bit
+    kern.append(v)
+print("kernel dim:", len(kern))
+for v in kern:
+    print("  kernel vec:", hex(v), "check:", state_at(v, seed) & 0xFFFFFF == 0)
+json.dump({"x0": x0, "kern": kern}, open("xsol.json","w"))
+EOF
+[49] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import json
+from rows import _transform, _transformation, _square_operator, MASK64
+from hashlib import shake_256
+
+d = json.load(open("server_data.json"))
+bn = bytes.fromhex(d["nonce"][:18])
+seed = 7693137237032699986
+target_state = int.from_bytes(bytes.fromhex(d["nonce"][18:]), "big")
+
+material = shake_256(bn).digest(5)
+available_shifts = list(range(1, 64)); shifts=[]
+for byte in material[1:]:
+    index = byte % len(available_shifts); shifts.append(available_shifts.pop(index))
+num = material[0] & 1
+first_jump = [_transform(1 << bit, num, shifts) for bit in range(64)]
+jumps = [first_jump]
+for _ in range(63):
+    jumps.append(_square_operator(jumps[-1]))
+def state_at(xx, s):
+    st = s & MASK64
+    for bit in range(64):
+        if xx & (1 << bit):
+            st = _transformation(jumps[bit], st)
+    return st
+
+# sanity: is the map x -> state_at(x,seed) linear in x?
+import random
+random.seed(7)
+for _ in range(5):
+    a, b = random.getrandbits(64), random.getrandbits(64)
+    lhs = state_at(a ^ b, seed) & 0xFFFFFF
+    rhs = (state_at(a, seed) ^ state_at(b, seed)) & 0xFFFFFF
+    print("linear check:", lhs == rhs, hex(lhs), hex(rhs))
+
+colv = [state_at(1 << bit, seed) & 0xFFFFFF for bit in range(64)]
+# direct check: does colv predict state_at(x,seed) for random x?
+x = random.getrandbits(64)
+pred = 0
+for j in range(64):
+    if (x >> j) & 1:
+        pred ^= colv[j]
+print("colv prediction:", hex(pred), "actual:", hex(state_at(x, seed) & 0xFFFFFF), pred == (state_at(x, seed) & 0xFFFFFF))
+EOF
+[50] run_command cd /home/ctfplayer/workspace && timeout 120 python3 - <<'EOF'
+import json
+from rows import _transform, _transformation, _square_operator, MASK64
+from hashlib import shake_256
+
+d = json.load(open("server_data.json"))
+bn = bytes.fromhex(d["nonce"][:18])
+seed = 7693137237032699986
+target = int.from_bytes(bytes.fromhex(d["nonce"][18:]), "big")
+
+material = shake_256(bn).digest(5)
+available_shifts = list(range(1, 64)); shifts=[]
+for byte in material[1:]:
+    index = byte % len(available_shifts); shifts.append(available_shifts.pop(index))
+num = material[0] & 1
+
+def T(state):
+    state ^= state >> shifts[0]
+    state ^= (state << shifts[1]) & MASK64
+    state ^= state >> shifts[2]
+    state ^= (state << shifts[3]) & MASK64
+    return state & MASK64
+
+# iterate T from seed, look for target in low 24 bits, and for return to seed
+st = seed
+found = None
+for i in range(1, 3000000):
+    st = T(st)
+    if (st & 0xFFFFFF) == target:
+        found = i
+        print("FOUND x =", i, "state:", hex(st))
+        break
+    if st == seed:
+        print("returned to seed at i =", i, "orbit size", i)
+        break
+else:
+    print("no match in 3M steps; last state:", hex(st))
+print("target:", hex(target))
+EOF
+[51] run_command cd /home/ctfplayer/workspace && timeout 180 python3 - <<'EOF'
+import socket, time, re
+s = socket.create_connection(("polly.chal.csaw.io", 5000), timeout=20)
+s.settimeout(10)
+
+def recv_until(marker, timeout=15):
+    buf = b""
+    end = time.time() + timeout
+    while marker not in buf:
+        d = s.recv(4096)
+        if not d: raise RuntimeError("EOF")
+        buf += d
+        if time.time() > end: raise RuntimeError("timeout %r" % buf[-100:])
+    return buf
+
+buf = recv_until(b"which seed")
+m = re.search(rb"encrypted flag is ([0-9a-f]+), the nonce is ([0-9a-f]+)", buf)
+print("flag ct:", m.group(1).decode())
+print("nonce:", m.group(2).decode())
+
+# deterministic sweep over many x values (powers of two + small ints + random-ish fixed set)
+xs = list(range(1, 65)) + [1<<i for i in range(64)] + [(1<<(63-i))-1 for i in range(8)]
+outs = {}
+for x in xs[:400]:
+    s.sendall(b"%d\n" % x)
+    recv_until(b"enter a string")
+    s.sendall(b"A\n")
+    data = recv_until(b"nonce byte is")
+    mb = re.search(rb"nonce byte is: ([0-9a-f]{2})", data)
+    outs[x] = int(mb.group(1), 16)
+s.close()
+import json; json.dump({"nonce": m.group(2).decode(), "flag_ct": m.group(1).decode(),
+                        "outs": {str(k): v for k,v in outs.items()}}, open("server_big.json","w"))
+print("collected", len(outs))
+EOF
+[52] run_command cd /home/ctfplayer/workspace && timeout 240 python3 - <<'EOF'
+import json
+from rows import _transform, _transformation, _square_operator, MASK64
+from hashlib import shake_256
+
+d = json.load(open("server_big.json"))
+bn = bytes.fromhex(d["nonce"][:18])
+outs = {int(k): v for k, v in d["outs"].items()}
+
+material = shake_256(bn).digest(5)
+available_shifts = list(range(1, 64)); shifts=[]
+for byte in material[1:]:
+    index = byte % len(available_shifts); shifts.append(available_shifts.pop(index))
+num = material[0] & 1
+print("shifts:", shifts, "num:", num)
+
+first_jump = [_transform(1 << bit, num, shifts) for bit in range(64)]
+jumps = [first_jump]
+for _ in range(63):
+    jumps.append(_square_operator(jumps[-1]))
+def state_at(xx, s):
+    st = s & MASK64
+    for bit in range(64):
+        if xx & (1 << bit):
+            st = _transformation(jumps[bit], st)
+    return st
+
+# Build the GF(2) system over seed bits: for each x, 8 equations
+rows, rhs = [], []
+for x in sorted(outs):
+    cc = [state_at(x, 1 << j) & 0xFFFFFF for j in range(64)]
+    out = outs[x]
+    for k in range(8):
+        rows.append(sum(((cc[j] >> k) & 1) << j for j in range(64)))
+        rhs.append((out >> k) & 1)
+
+piv = {}
+for r, b in zip(rows, rhs):
+    cur, curb = r, b
+    while cur:
+        bit = (cur & -cur).bit_length() - 1
+        if bit in piv:
+            pr, pb = piv[bit]
+            cur ^= pr; curb ^= pb
+        else:
+            piv[bit] = (cur, curb); break
+    else:
+        if curb:
+            print("INCONSISTENT")
+            break
+print("rank:", len(piv))
+free = [j for j in range(64) if j not in piv]
+print("free bits:", free)
+
+# enumerate all solutions (up to 2^free)
+x0 = 0
+for bit in sorted(piv.keys(), reverse=True):
+    r, b = piv[bit]
+    if b ^ (bin(r & x0).count("1") & 1):
+        x0 |= 1 << bit
+print("particular:", hex(x0))
+kern = []
+for f in free:
+    v = 1 << f
+    for bit in sorted(piv.keys(), reverse=True):
+        r, b = piv[bit]
+        if bin(r & v).count("1") & 1:
+            v |= 1 << bit
+    kern.append(v)
+print("kernel dim:", len(kern))
+json.dump({"x0": x0, "kern": kern}, open("seed_sols.json","w"))
+EOF
+[53] run_command 
+[54] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import json
+from rows import _transform, _transformation, _square_operator, MASK64
+from hashlib import shake_256
+
+d = json.load(open("server_big.json"))
+bn = bytes.fromhex(d["nonce"][:18])
+seed = 0x88c0ebc849358acb
+
+material = shake_256(bn).digest(5)
+available_shifts = list(range(1, 64)); shifts=[]
+for byte in material[1:]:
+    index = byte % len(available_shifts); shifts.append(available_shifts.pop(index))
+num = material[0] & 1
+
+def T(state):
+    if num % 2 == 0:
+        state ^= (state << shifts[0]) & MASK64
+        state ^= state >> shifts[1]
+        state ^= (state << shifts[2]) & MASK64
+        state ^= state >> shifts[3]
+    else:
+        state ^= state >> shifts[0]
+        state ^= (state << shifts[1]) & MASK64
+        state ^= state >> shifts[2]
+        state ^= (state << shifts[3]) & MASK64
+    return state & MASK64
+
+first_jump = [_transform(1 << bit, num, shifts) for bit in range(64)]
+jumps = [first_jump]
+for _ in range(63):
+    jumps.append(_square_operator(jumps[-1]))
+def state_at(xx, s):
+    st = s & MASK64
+    for bit in range(64):
+        if xx & (1 << bit):
+            st = _transformation(jumps[bit], st)
+    return st
+
+# verify state_at(x,seed) == T^x(seed)
+st = seed
+ok = True
+for i in range(1, 5000):
+    st = T(st)
+    if st != state_at(i, seed):
+        ok = False
+        print("MISMATCH at i =", i, hex(st), hex(state_at(i, seed)))
+        break
+print("state_at == T^x:", ok)
+# also verify oracle outputs
+outs = {int(k): v for k, v in d["outs"].items()}
+bad = [x for x in sorted(outs) if (state_at(x, seed) & 0xFFFFFF) != outs[x]]
+print("oracle mismatches:", len(bad), bad[:10])
+EOF
+[55] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import json
+from rows import _transform, _transformation, _square_operator, MASK64
+from hashlib import shake_256
+
+d = json.load(open("server_big.json"))
+bn = bytes.fromhex(d["nonce"][:18])
+seed = 0x88c0ebc849358acb
+outs = {int(k): v for k, v in d["outs"].items()}
+
+material = shake_256(bn).digest(5)
+available_shifts = list(range(1, 64)); shifts=[]
+for byte in material[1:]:
+    index = byte % len(available_shifts); shifts.append(available_shifts.pop(index))
+num = material[0] & 1
+first_jump = [_transform(1 << bit, num, shifts) for bit in range(64)]
+jumps = [first_jump]
+for _ in range(63):
+    jumps.append(_square_operator(jumps[-1]))
+def state_at(xx, s):
+    st = s & MASK64
+    for bit in range(64):
+        if xx & (1 << bit):
+            st = _transformation(jumps[bit], st)
+    return st
+
+for x in sorted(outs)[:10]:
+    print("x=%d pred=%08x actual=%02x" % (x, state_at(x, seed) & 0xFFFFFF, outs[x]))
+EOF
+[56] run_command 
+[57] record_finding {"text": "Polly: oracle leaks only nonce byte 7 (1 byte). Seed recovery works via GF(2) system from x=1..129 using state_at(x,1<<j)&0xFF columns (rows.py build_cols + solver.gf2_solve). Recovered seed for instance nonce b85ac5d9d7e64ad2f8ee8b25: 0x88c0ebc849358acb, verified on all 129 oracle outputs. state_at(x,seed)==T^x(seed) confirmed. Remaining step: find x with T^x(seed)&0xFFFFFF == flag nonce low24, then keystream-reuse decrypt (send flag-length plaintext, xor out).", "kind": "fact"}
+[57] create_file {"content": "\"\"\"Find x with T^x(seed) & 0xFFFFFF == target, using the minimal polynomial of T.\n\nEvery coordinate of T^i(seed) satisfies the degree-n recurrence of the minimal\npolynomial m(z) = z^n + sum_j c_j z^(n-j).  We derive n and c_j from the actual\nstate sequence, then use meet-in-the-middle over jump matrices to find positions\nwhose low-24 state matches the target.\n\"\"\"\nimport json\nfrom rows import _transform, _transformation, _square_operator, MASK64\nfrom hashlib import shake_256\n\nd = json.load(open(\"/home/ctfplayer/workspace/server_big.json\"))\nbn = bytes.fromhex(d[\"nonce\"][:18])\nseed = 0x88c0ebc849358acb\ntarget = int.from_bytes(bytes.fromhex(d[\"nonce\"][18:]), \"big\")\n\nmaterial = shake_256(bn).digest(5)\navailable_shifts = list(range(1, 64)); shifts = []\nfor byte in material[1:]:\n    index = byte % len(available_shifts); shifts.append(available_shifts.pop(index))\nnum = material[0] & 1\nprint(\"shifts:\", shifts, \"num:\", num)\n\nfirst_jump = [_transform(1 << bit, num, shifts) for bit in range(64)]\nJUMPS = [first_jump]\nfor _ in range(63):\n    JUMPS.append(_square_operator(JUMPS[-1]))\n\ndef state_at(xx, s=seed):\n    st = s & MASK64\n    for bit in range(64):\n        if xx & (1 << bit):\n            st = _transformation(JUMPS[bit], st)\n    return st\n\ndef T(state):\n    if num % 2 == 0:\n        state ^= (state << shifts[0]) & MASK64\n        state ^= state >> shifts[1]\n        state ^= (state << shifts[2]) & MASK64\n        state ^= state >> shifts[3]\n    else:\n        state ^= state >> shifts[0]\n        state ^= (state << shifts[1]) & MASK64\n        state ^= state >> shifts[2]\n        state ^= (state << shifts[3]) & MASK64\n    return state & MASK64\n\n# ---- derive minimal polynomial from the sequence of low-24-bit states ----\nseq = []\nst = seed\nfor i in range(600):\n    seq.append(st & 0xFFFFFF)\n    st = T(st)\n\ndef berlekamp_massey(s, mod2=True):\n    n = len(s)\n    C = [1] + [0]*n\n    B = [1] + [0]*n\n    L, m = 0, 1\n    b = 1\n    for N in range(n):\n        d = s[N]\n        for i in range(1, L+1):\n            d ^= C[i] & s[N-i]\n        if d == 0:\n            m += 1\n        elif 2*L <= N:\n            T = C[:]\n            coef = (d * pow(b, -1, 2)) % 2\n            for i in range(len(B)):\n                if i + m < len(C):\n                    C[i+m] ^= coef & B[i]\n            L, B, b, m = N+1-L, T, d, 1\n        else:\n            coef = (d * pow(b, -1, 2)) % 2\n            for i in range(len(B)):\n                if i + m < len(C):\n                    C[i+m] ^= coef & B[i]\n            m += 1\n    return L, C[:L+1]\n\nL, poly = berlekamp_massey(seq)\nprint(\"recurrence degree:\", L)\nprint(\"poly coeffs (C[0..L]):\", poly)\n\n# verify recurrence on the sequence\nok = True\nn = len(seq)\nfor i in range(L, n):\n    acc = 0\n    for j in range(1, L+1):\n        if poly[j]:\n            acc ^= seq[i-j]\n    if acc != seq[i]:\n        ok = False\n        print(\"recurrence fails at i=\", i)\n        break\nprint(\"recurrence verified:\", ok)\njson.dump({\"L\": L, \"poly\": poly}, open(\"/home/ctfplayer/workspace/mpoly.json\", \"w\"))\n", "path": "/home/ctfplayer/workspace/find_x.py"}
+[58] run_command cd /home/ctfplayer/workspace && timeout 120 python3 find_x.py
+[59] create_file 

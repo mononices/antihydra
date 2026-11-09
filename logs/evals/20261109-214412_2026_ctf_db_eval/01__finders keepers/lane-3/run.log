@@ -1,0 +1,306 @@
+[01] run_command ls -la /home/ctfplayer/ctf_files/ && file /home/ctfplayer/ctf_files/finderskeepers.mp4
+[01] run_command which ffmpeg ffprobe exiftool binwalk strings python3 2>/dev/null; cat /tools.txt 2>/dev/null | head -50
+[02] run_command cd /home/ctfplayer/workspace && ffprobe -v quiet -print_format json -show_format -show_streams /home/ctfplayer/ctf_files/finderskeepers.mp4
+[02] run_command exiftool /home/ctfplayer/ctf_files/finderskeepers.mp4
+[03] run_command echo -n 'ZXNucHtkMGNfQHl6QGdsX21uMGpfcG0zejNfZzBfbzAwc30=' | base64 -d; echo
+[03] run_command cd /home/ctfplayer/workspace && strings -n 6 /home/ctfplayer/ctf_files/finderskeepers.mp4 | head -60 && echo ---- && binwalk /home/ctfplayer/ctf_files/finderskeepers.mp4
+[04] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import string, base64
+s = base64.b64decode('ZXNucHtkMGNfQHl6QGdsX21uMGpfcG0zejNfZzBfbzAwc30=').decode()
+print("orig:", s)
+# Caesar on letters only
+for k in range(26):
+    out=''.join(chr((ord(c)-97+k)%26+97) if c.islower() else chr((ord(c)-65+k)%26+65) if c.isupper() else c for c in s)
+    print(k, out)
+# Atbash
+print("atbash:", ''.join(chr(219-ord(c)) if c.islower() else chr(155-ord(c)) if c.isupper() else c for c in s))
+EOF
+[04] run_command cd /home/ctfplayer/workspace && mkdir -p frames && ffmpeg -v error -i /home/ctfplayer/ctf_files/finderskeepers.mp4 -vf "fps=2" frames/f_%03d.png && ls frames | wc -l && ffprobe -v error -show_entries stream=codec_type -of csv /home/ctfplayer/ctf_files/finderskeepers.mp4
+[05] run_command which tesseract zbarimg; python3 -c "import PIL; print(PIL.__version__)" 2>&1; python3 -c "import cv2; print(cv2.__version__)" 2>&1
+[05] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import itertools
+s='esnp{d0c_@yz@gl_mn0j_pm3z3_g0_o00s}'
+# QWERTY rows
+rows=['`1234567890-=','qwertyuiop[]\\',"asdfghjkl;'",'zxcvbnm,./']
+pos={}
+for r,row in enumerate(rows):
+    for i,c in enumerate(row):
+        pos[c]=(r,i)
+def shift(s,dr,di):
+    out=[]
+    for c in s:
+        if c in pos:
+            r,i=pos[c]
+            r2,i2=r+dr,i+di
+            if 0<=r2<len(rows) and 0<=i2<len(rows[r2]):
+                out.append(rows[r2][i2])
+            else: out.append(c)
+        else: out.append(c)
+    return ''.join(out)
+for dr in (-1,0,1):
+    for di in (-2,-1,0,1,2):
+        if dr==0 and di==0: continue
+        print(dr,di,shift(s,dr,di))
+EOF
+[06] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import base64
+s1=base64.b64decode('ZXNucHtkMGNfQHl6QGdsX21uMGpfcG0zejNfZzBfbzAwc30=').decode()
+print("s1:", s1, len(s1))
+# Try common cipher transforms: ROT13 on letters/digits combined alphabet
+import string
+alpha = string.ascii_lowercase + string.digits
+for k in range(len(alpha)):
+    m = {c: alpha[(alpha.index(c)+k)%len(alpha)] for c in alpha}
+    out=''.join(m.get(c,c) for c in s1)
+    print(k, out)
+EOF
+[06] run_command cd /home/ctfplayer/workspace && ffmpeg -v error -i /home/ctfplayer/ctf_files/finderskeepers.mp4 -vf "fps=1,scale=960:-1" frames/s_%02d.png && ls frames && for f in frames/s_*.png; do echo "== $f"; tesseract "$f" - 2>/dev/null | head -5; done
+[07] run_command which chafa img2txt jp2 timg viu 2>/dev/null; echo ---; cd /home/ctfplayer/workspace && python3 - <<'EOF'
+from PIL import Image
+im = Image.open('frames/s_01.png').convert('L')
+w,h = im.size
+print(w,h)
+im2 = im.resize((120, 34))
+px = im2.load()
+chars = " .:-=+*#%@"
+for y in range(34):
+    print(''.join(chars[min(9, (255-px[x,y])*10//256)] for x in range(120)))
+EOF
+[08] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+from PIL import Image, ImageChops
+import glob
+fs = sorted(glob.glob('frames/f_*.png'))
+base = Image.open(fs[0]).convert('RGB')
+print(len(fs))
+for f in fs[1:]:
+    im = Image.open(f).convert('RGB')
+    diff = ImageChops.difference(base, im)
+    bbox = diff.getbbox()
+    print(f, bbox, diff.getextrema())
+EOF
+[09] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import struct
+data=open('/home/ctfplayer/ctf_files/finderskeepers.mp4','rb').read()
+print(len(data))
+def walk(buf, off, end, depth=0):
+    while off+8<=end:
+        size,typ = struct.unpack('>I4s', buf[off:off+8])
+        typ=typ.decode('latin1')
+        hdr=8
+        if size==1:
+            size=struct.unpack('>Q',buf[off+8:off+16])[0]; hdr=16
+        elif size==0:
+            size=end-off
+        print('  '*depth, typ, size, hex(off))
+        if typ in ('moov','trak','mdia','minf','stbl','dinf','edts','udta','meta','ilst','\xa9xyz','mvex','moof','traf'):
+            walk(buf, off+hdr, off+size, depth+1)
+        off+=size
+walk(data,0,len(data))
+EOF
+[10] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+data=open('/home/ctfplayer/ctf_files/finderskeepers.mp4','rb').read()
+off=0x1175
+size=int.from_bytes(data[off:off+4],'big'); typ=data[off+4:off+8]
+print(typ, size)
+uuid=data[off+8:off+16]
+print('uuid:', uuid.hex())
+payload=data[off+16:off+size]
+open('uuid_payload.bin','wb').write(payload)
+print(len(payload))
+print(payload[:200])
+EOF
+file uuid_payload.bin; xxd uuid_payload.bin | head -20
+[11] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+data=open('/home/ctfplayer/ctf_files/finderskeepers.mp4','rb').read()
+off=0x1175
+size=int.from_bytes(data[off:off+4],'big')
+print('uuid:', data[off+8:off+24].hex())
+payload=data[off+24:off+size]
+print(len(payload))
+open('xmp.bin','wb').write(payload)
+# print non-space lines
+import re
+txt=payload.decode('latin1')
+for line in txt.split('\n'):
+    if line.strip():
+        print(repr(line))
+EOF
+[12] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import base64, itertools, string
+ct = base64.b64decode('ZXNucHtkMGNfQHl6QGdsX21uMGpfcG0zejNfZzBfbzAwc30=').decode()
+print("ct:", ct)
+def vig(s,key,dec=True):
+    out=[]
+    ki=0
+    for c in s:
+        if c.isalpha():
+            k=ord(key[ki%len(key)].lower())-97; ki+=1
+            base=ord('a') if c.islower() else ord('A')
+            v=(ord(c)-base + (-k if dec else k))%26
+            out.append(chr(base+v))
+        else:
+            out.append(c)
+    return ''.join(out)
+keys=['finderskeepers','finders','keepers','finder','keeper','canva','jc','csaw','flag','hidden','message','xmp','video']
+for k in keys:
+    print(k, vig(ct,k,True), '|', vig(ct,k,False))
+EOF
+[12] run_command cd /home/ctfplayer/workspace && mkdir -p all && ffmpeg -v error -i /home/ctfplayer/ctf_files/finderskeepers.mp4 all/%03d.png && ls all | wc -l
+[13] run_command cd /home/ctfplayer/workspace && for f in all/001.png all/060.png all/120.png all/180.png all/240.png all/300.png; do echo "=== $f"; tesseract "$f" - --psm 11 2>/dev/null | grep -v '^\s*$' | head -10; done
+[13] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+from PIL import Image
+import glob
+for name in ['all/001.png','all/150.png','all/300.png']:
+    im = Image.open(name).convert('L')
+    im2 = im.resize((160,45))
+    px=im2.load()
+    chars=" .:-=+*#%@"
+    print("====", name)
+    for y in range(45):
+        print(''.join(chars[min(9,(255-px[x,y])*10//256)] for x in range(160)))
+EOF
+[15] run_command 
+[16] create_file {"path": "/home/ctfplayer/workspace/tiles.py", "content": "from PIL import Image\nimport os, subprocess\n\nim = Image.open('all/150.png').convert('L')\nw, h = im.size\nos.makedirs('tiles', exist_ok=True)\nk = 0\nfor j in range(3):\n    for i in range(3):\n        box = (i*w//3, j*h//3, (i+1)*w//3, (j+1)*h//3)\n        tile = im.crop(box).resize(((w//3)*2, (h//3)*2), Image.LANCZOS)\n        p = f'tiles/t{k}.png'\n        tile.save(p)\n        out = subprocess.run(['tesseract', p, '-', '--psm', '6'], capture_output=True, text=True)\n        print('====', p, repr(out.stdout.replace('\\n', ' | ')))\n        k += 1\n"}
+[17] run_command cd /home/ctfplayer/workspace && python3 tiles.py
+[18] create_file {"content": "from PIL import Image\nimport numpy as np\n\nim = Image.open('all/001.png').convert('L')\na = np.array(im)\nprint(a.shape, a.min(), a.max(), a.mean())\n# background appears dark (values near 0?) Let's histogram\nhist, _ = np.histogram(a, bins=16, range=(0,256))\nprint(hist)\n# find pixels that are bright (text on dark bg?) \nmask = a > 128\nys, xs = np.where(mask)\nprint(\"bright count\", mask.sum())\nif mask.sum():\n    print(\"bbox\", xs.min(), xs.max(), ys.min(), ys.max())\nmask2 = a < 128\nys2, xs2 = np.where(mask2)\nprint(\"dark count\", mask2.sum())\nif mask2.sum():\n    print(\"bbox dark\", xs2.min(), xs2.max(), ys2.min(), ys2.max())\n", "path": "/home/ctfplayer/workspace/inspect1.py"}
+[19] run_command cd /home/ctfplayer/workspace && python3 inspect1.py
+[20] create_file {"content": "from PIL import Image, ImageOps\nimport subprocess, os\n\nos.makedirs('oc', exist_ok=True)\nfor n in [1, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300]:\n    p = f'all/{n:03d}.png'\n    im = Image.open(p).convert('L')\n    # invert, threshold, upscale\n    inv = ImageOps.invert(im)\n    im2 = inv.point(lambda v: 255 if v > 60 else 0)\n    im3 = im2.resize((im2.width*2, im2.height*2), Image.LANCZOS)\n    q = f'oc/{n:03d}.png'\n    im3.save(q)\n    r = subprocess.run(['tesseract', q, '-', '--psm', '11'], capture_output=True, text=True)\n    txt = ' '.join(r.stdout.split())\n    print(n, ':', txt[:400])\n", "path": "/home/ctfplayer/workspace/ocr.py"}
+[21] run_command cd /home/ctfplayer/workspace && python3 ocr.py
+[22] create_file {"content": "from PIL import Image, ImageChops\nimport numpy as np\nimport glob\n\nfs = sorted(glob.glob('all/*.png'))\nprint(len(fs))\nprev = np.array(Image.open(fs[0]).convert('L')).astype(np.int16)\nminv = prev.copy()\nmaxv = prev.copy()\nsumv = prev.astype(np.float64).copy()\nalldiff = np.zeros_like(prev)\nfor f in fs[1:]:\n    a = np.array(Image.open(f).convert('L')).astype(np.int16)\n    d = np.abs(a - prev).astype(np.uint8)\n    alldiff = np.maximum(alldiff, d)\n    np.maximum(maxv, a, out=maxv)\n    np.minimum(minv, a, out=minv)\n    sumv += a\n    prev = a\n\nImage.fromarray(alldiff).save('alldiff.png')\nImage.fromarray(np.abs(alldiff).astype(np.uint8)).save('alldiff2.png')\nImage.fromarray(np.clip(sumv/len(fs), 0, 255).astype(np.uint8)).save('mean.png')\nImage.fromarray((maxv-minv).astype(np.uint8)).save('range.png')\nprint('diff max', alldiff.max(), 'nonzero pixels', (alldiff>0).sum())\nys, xs = np.where(alldiff > 0)\nif len(xs):\n    print('bbox', xs.min(), xs.max(), ys.min(), ys.max())\n", "path": "/home/ctfplayer/workspace/temporal.py"}
+[23] run_command cd /home/ctfplayer/workspace && python3 temporal.py
+[24] create_file {"content": "from PIL import Image\nimport numpy as np\n\na = np.array(Image.open('all/001.png').convert('L'))\nmask = a > 100\nrowsum = mask.sum(axis=1)\ncolsum = mask.sum(axis=0)\n# print row bands where content exists\nbands = []\nin_band = False\nfor y, v in enumerate(rowsum):\n    if v > 0 and not in_band:\n        start = y; in_band = True\n    elif v == 0 and in_band:\n        bands.append((start, y)); in_band = False\nif in_band: bands.append((start, len(rowsum)))\nprint(\"row bands:\", bands)\ncbands = []\nin_band = False\nfor x, v in enumerate(colsum):\n    if v > 0 and not in_band:\n        start = x; in_band = True\n    elif v == 0 and in_band:\n        cbands.append((start, x)); in_band = False\nif in_band: cbands.append((start, len(colsum)))\nprint(\"col bands:\", cbands)\n", "path": "/home/ctfplayer/workspace/bands.py"}
+[25] run_command cd /home/ctfplayer/workspace && python3 bands.py
+[26] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+data=open('/home/ctfplayer/ctf_files/finderskeepers.mp4','rb').read()
+# uuid box at 0x1175 size 3483
+start=0x1175; size=3483
+payload=data[start+24:start+size]
+txt=payload.decode('latin1')
+i=txt.find("<?xpacket end='w'?>")
+print("xmp end at", i, len(txt))
+rest=payload[i+len("<?xpacket end='w'"?>".replace('"','')):]
+print(repr(rest[:300]))
+print("---- skip box (udta) at 0x111c:")
+off=0x111c
+sz=int.from_bytes(data[off:off+4],'big')
+print(sz, data[off+4:off+sz].hex())
+EOF
+[28] create_file {"content": "data = open('/home/ctfplayer/ctf_files/finderskeepers.mp4', 'rb').read()\nstart = 0x1175\nsize = 3483\npayload = data[start+24:start+size]\ntxt = payload.decode('latin1')\nend_marker = \"<?xpacket end='w'?>\"\ni = txt.find(end_marker)\nprint(\"xmp end at\", i, \"payload len\", len(payload))\nrest = payload[i+len(end_marker):]\nprint(\"rest len\", len(rest))\nprint(repr(rest[:400]))\nprint(\"=== skip box (udta child) at 0x111c:\")\noff = 0x111c\nsz = int.from_bytes(data[off:off+4], 'big')\nprint(\"size\", sz)\nprint(data[off+4:off+sz].hex())\n# also check the whole file for trailing data after mdat\nmdat_off = 0x1f10\nmdat_sz = int.from_bytes(data[mdat_off:mdat_off+4], 'big')\nprint(\"mdat size\", mdat_sz, \"ends at\", mdat_off+mdat_sz, \"file len\", len(data))\n", "path": "/home/ctfplayer/workspace/tail.py"}
+[29] run_command cd /home/ctfplayer/workspace && python3 tail.py
+[30] create_file {"content": "from PIL import Image\nimport numpy as np, sys\n\nname = sys.argv[1] if len(sys.argv) > 1 else 'all/001.png'\nW = int(sys.argv[2]) if len(sys.argv) > 2 else 180\nim = Image.open(name).convert('L')\nw, h = im.size\nH = int(W * h / w / 2.1)\nim2 = im.resize((W, H), Image.LANCZOS)\na = np.array(im2)\nchars = \" .:-=+*#%@\"\nprint(name, im2.size)\nfor y in range(H):\n    print(''.join(chars[min(9, a[y, x] * 10 // 256)] for x in range(W)))\n", "path": "/home/ctfplayer/workspace/ascii.py"}
+[31] run_command cd /home/ctfplayer/workspace && python3 ascii.py all/001.png 180
+[33] create_file {"content": "from PIL import Image\nimport numpy as np, glob\n\nfs = sorted(glob.glob('all/*.png'))\narrs = []\nfor f in fs:\n    arrs.append(np.array(Image.open(f).convert('L')).astype(np.int16))\nA = np.stack(arrs)  # 300 x 1080 x 1920\nmed = np.median(A, axis=0)\nnp.save('med.npy', med)\ncounts = []\nfor i in range(A.shape[0]):\n    d = np.abs(A[i] - med)\n    counts.append(int((d > 40).sum()))\ncounts = np.array(counts)\nfor i in range(0, 300, 10):\n    print(i+1, counts[i:i+10].tolist())\nprint(\"max\", counts.max(), \"argmax\", counts.argmax()+1)\nprint(\"min\", counts.min(), \"argmin\", counts.argmin()+1)\n", "path": "/home/ctfplayer/workspace/median.py"}
+[34] run_command cd /home/ctfplayer/workspace && python3 median.py
+[35] run_command cd /home/ctfplayer/workspace && ffmpeg -v error -y -i /home/ctfplayer/ctf_files/finderskeepers.mp4 -c copy -bsf:v h264_mp4toannexb out.h264 && ls -l out.h264 && python3 - <<'EOF'
+data=open('out.h264','rb').read()
+print(len(data))
+# find start codes
+import re
+positions=[m.start() for m in re.finditer(rb'\x00\x00\x01', data)]
+print("num start codes", len(positions))
+types={}
+for p in positions:
+    off=p+3
+    while data[off]==0: off+=1
+    nal=data[off]
+    t=nal&0x1f
+    types[t]=types.get(t,0)+1
+print(types)
+# dump SEI (6) and SPS(7)/PPS(8)
+for p in positions:
+    off=p+3
+    while data[off]==0: off+=1
+    t=data[off]&0x1f
+    if t in (6,):
+        seg=data[p:p+120]
+        print("SEI at", p, seg.hex())
+EOF
+[36] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import base64, itertools
+ct = 'ZXNucHtkMGNfQHl6QGdsX21uMGpfcG0zejNfZzBfbzAwc30='
+raw = base64.b64decode(ct).decode()
+print(raw)
+# maybe double base64? check if raw decodes as b64 too
+try:
+    print(base64.b64decode(raw))
+except Exception as e:
+    print("no", e)
+# Try applying keyboard shift to base64 then decode
+alpha = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+for k in range(len(alpha)):
+    out = ''.join(alpha[(alpha.index(c)+k)%len(alpha)] if c in alpha else c for c in ct)
+    try:
+        d = base64.b64decode(out, validate=True)
+        # check printable
+        if all(32 <= b < 127 for b in d):
+            print(k, repr(d))
+    except Exception:
+        pass
+EOF
+[36] run_command cd /home/ctfplayer/workspace && python3 ascii.py all/209.png 180 | head -50
+[37] create_file {"content": "import subprocess, glob, re\nfrom PIL import Image, ImageOps\n\nfs = sorted(glob.glob('all/*.png'))\nhits = []\nfor f in fs:\n    im = Image.open(f).convert('L')\n    im = im.resize((im.width*2, im.height*2), Image.LANCZOS)\n    im = im.point(lambda v: 255 if v > 90 else 0)\n    im.save('tmp_ocr.png')\n    r = subprocess.run(['tesseract', 'tmp_ocr.png', '-', '--psm', '11'], capture_output=True, text=True)\n    txt = r.stdout\n    words = re.findall(r'[A-Za-z0-9{}_@]{4,}', txt)\n    if words:\n        hits.append((f, words))\nfor f, w in hits:\n    print(f, w)\nprint(\"total hits\", len(hits))\n", "path": "/home/ctfplayer/workspace/ocr_all.py"}
+[38] run_command cd /home/ctfplayer/workspace && timeout 280 python3 ocr_all.py 2>/dev/null | tail -40
+[39] run_command python3 -c "import scipy; print(scipy.__version__)" 2>&1; python3 -c "import skimage; print(skimage.__version__)" 2>&1; python3 -c "import pytesseract; print('pytesseract ok')" 2>&1; sudo apt list --installed 2>/dev/null | grep -i -E "tesseract|zbar|opencv" | head
+[40] create_file {"content": "from PIL import Image\nimport numpy as np\n\n# Look at a single frame; check the blocks (visible UI elements). Find bounding boxes of connected components of bright pixels.\nfrom scipy import ndimage\n\na = np.array(Image.open('all/150.png').convert('L'))\nmask = a > 100\nlab, n = ndimage.label(mask)\nprint(\"components\", n)\nsizes = ndimage.sum(mask, lab, range(1, n+1))\norder = np.argsort(sizes)[::-1]\nfor i in order[:20]:\n    comp = i+1\n    ys, xs = np.where(lab == comp)\n    print(comp, int(sizes[i]), \"bbox\", xs.min(), xs.max(), ys.min(), ys.max())\n", "path": "/home/ctfplayer/workspace/comp.py"}
+[41] run_command cd /home/ctfplayer/workspace && python3 comp.py
+[42] run_command cd /home/ctfplayer/workspace && python3 ascii.py all/141.png 180
+[44] create_file {"content": "from PIL import Image\nimport numpy as np\n\na = np.array(Image.open('all/150.png').convert('L'))\nprint(a.shape)\n# Card 3: bbox x 144-487, y 351-710\ncrop = a[351:711, 144:488]\nprint(\"crop stats\", crop.min(), crop.max(), crop.mean())\nhist, _ = np.histogram(crop, bins=16, range=(0,256))\nprint(hist)\n# unique values\nvals, cnts = np.unique(crop, return_counts=True)\nprint(list(zip(vals.tolist(), cnts.tolist()))[:40])\nprint(\"n unique\", len(vals))\n", "path": "/home/ctfplayer/workspace/card.py"}
+[45] run_command cd /home/ctfplayer/workspace && python3 card.py
+[46] create_file {"content": "from PIL import Image\nimport numpy as np\n\na = np.array(Image.open('all/150.png').convert('L'))\ncrop = a[351:711, 144:488]\n# threshold into two classes: dark text vs mid-gray card\nmask = (crop > 30) & (crop < 140)\nprint(\"text pixels\", mask.sum())\nys, xs = np.where(mask)\nprint(\"bbox\", xs.min(), xs.max(), ys.min(), ys.max())\n# Save as image for viewing\nImage.fromarray((mask*255).astype(np.uint8)).resize((344*2, 360*2), Image.NEAREST).save('card3_mask.png')\n\n# Also create inverse: text white on black, threshold 150\nm2 = crop < 150\nImage.fromarray((m2*255).astype(np.uint8)).save('card3_dark.png')\n", "path": "/home/ctfplayer/workspace/card2.py"}
+[47] run_command cd /home/ctfplayer/workspace && python3 card2.py && python3 ascii.py card3_dark.png 120
+[48] create_file {"content": "from PIL import Image\nimport numpy as np\n\na = np.array(Image.open('all/150.png').convert('L'))\ncard = a[351:711, 144:488]\ntext = (card > 25) & (card < 165)\nys, xs = np.where(text)\nprint(\"text bbox x\", xs.min(), xs.max(), \"y\", ys.min(), ys.max(), \"count\", text.sum())\nsub = text[ys.min():ys.max()+1, xs.min():xs.max()+1]\nprint(\"sub shape\", sub.shape)\nH, W = sub.shape\n# Print rows compressed \nfor y in range(0, H, 1):\n    row = ''.join('#' if sub[y, x] else '.' for x in range(0, W, 1))\n    print(f\"{y:3d} {row}\")\n", "path": "/home/ctfplayer/workspace/card3.py"}
+[49] run_command cd /home/ctfplayer/workspace && python3 card3.py | head -120
+[50] create_file {"content": "from PIL import Image\nimport numpy as np, sys\n\nname = sys.argv[1]\nbox = [int(v) for v in sys.argv[2:6]]\nW = int(sys.argv[6]) if len(sys.argv) > 6 else 120\nim = Image.open(name).convert('L').crop(tuple(box))\nw, h = im.size\nH = max(1, int(W * h / w / 2.1))\nim2 = im.resize((W, H), Image.LANCZOS)\na = np.array(im2)\nchars = \" .:-=+*#%@\"\nfor y in range(H):\n    print(''.join(chars[min(9, a[y, x] * 10 // 256)] for x in range(W)))\n", "path": "/home/ctfplayer/workspace/ascii_crop.py"}
+[51] run_command cd /home/ctfplayer/workspace && python3 ascii_crop.py all/150.png 0 0 1920 215 170 && echo ================== && python3 ascii_crop.py all/150.png 880 1010 1310 1080 170
+[52] create_file {"content": "from PIL import Image\nimport numpy as np\nfrom scipy import ndimage\nimport subprocess\n\nfor fn in ['all/141.png', 'all/150.png', 'all/209.png']:\n    a = np.array(Image.open(fn).convert('L'))\n    mask = a > 100\n    lab, n = ndimage.label(mask)\n    print('####', fn, 'components', n)\n    for comp in range(1, n+1):\n        ys, xs = np.where(lab == comp)\n        if len(xs) < 5000:\n            continue\n        y0, y1, x0, x1 = ys.min(), ys.max(), xs.min(), xs.max()\n        print('comp', comp, 'bbox', x0, x1, y0, y1, 'size', len(xs))\n        crop = Image.open(fn).convert('L').crop((x0, y0, x1+1, y1+1))\n        crop = crop.resize((crop.width*3, crop.height*3), Image.LANCZOS)\n        p = 'c.png'\n        crop.save(p)\n        r = subprocess.run(['tesseract', p, '-', '--psm', '6'], capture_output=True, text=True)\n        print('   OCR psm6:', ' '.join(r.stdout.split()))\n        r = subprocess.run(['tesseract', p, '-', '--psm', '11'], capture_output=True, text=True)\n        print('   OCR psm11:', ' '.join(r.stdout.split()))\n", "path": "/home/ctfplayer/workspace/cardocr.py"}
+[53] run_command cd /home/ctfplayer/workspace && python3 cardocr.py 2>/dev/null
+[54] run_command cd /home/ctfplayer/workspace && git status 2>/dev/null; ls /home/ctfplayer/ctf_files/; find /home/ctfplayer -maxdepth 2 -type f -newer /home/ctfplayer/ctf_files/finderskeepers.mp4 2>/dev/null | head -20
+[55] create_file {"content": "from PIL import Image\nimport numpy as np, glob\n\nfs = sorted(glob.glob('all/*.png'))\nprev = None\nstats = []\nfor f in fs:\n    a = np.array(Image.open(f).convert('L')).astype(np.float32)\n    m = a.mean()\n    s = a.std()\n    if prev is not None:\n        d = np.abs(a - prev)\n        stats.append((f, m, s, d.mean(), (d > 30).mean()))\n    else:\n        stats.append((f, m, s, 0, 0))\n    prev = a\n\nimport statistics\nmeans = [x[1] for x in stats]\ndmeans = [x[3] for x in stats]\nprint(\"mean of means\", np.mean(means), \"std\", np.std(means))\nmu, sd = np.mean(dmeans), np.std(dmeans)\nfor f, m, s, dm, frac in stats:\n    z = (dm - mu) / (sd + 1e-9)\n    if abs(z) > 2.0:\n        print(f, f\"mean={m:.1f} std={s:.1f} dmean={dm:.2f} frac={frac:.3f} z={z:.2f}\")\nprint(\"DONE; max dmean\", max(dmeans))\n", "path": "/home/ctfplayer/workspace/anom.py"}
+[56] create_file {"content": "from PIL import Image\nimport numpy as np, sys\n\nfn = sys.argv[1]\nbox = [int(v) for v in sys.argv[2:6]]\nthr = int(sys.argv[6]) if len(sys.argv) > 6 else 100\na = np.array(Image.open(fn).convert('L'))\ncrop = a[box[1]:box[3], box[0]:box[2]]\nmask = crop > thr\nH, W = mask.shape\nprint(f\"{fn} crop {box} shape {mask.shape} min {crop.min()} max {crop.max()} mean {crop.mean():.1f}\")\n# compress horizontally by 2 for readability\nfor y in range(H):\n    row = ''.join('#' if mask[y, x] else '.' for x in range(W))\n    print(row)", "path": "/home/ctfplayer/workspace/pix.py"}
+[57] run_command cd /home/ctfplayer/workspace && timeout 290 python3 anom.py
+[58] create_file {"content": "import subprocess, glob, re\nfrom PIL import Image, ImageOps, ImageFilter\nimport numpy as np\n\nfs = sorted(glob.glob('all/*.png'))[::5]\nallhits = {}\nfor f in fs:\n    im = Image.open(f).convert('L')\n    a = np.array(im).astype(np.float32)\n    # adaptive threshold: subtract heavily blurred version\n    blur = np.array(im.filter(ImageFilter.GaussianBlur(25))).astype(np.float32)\n    diff = a - blur\n    m = (diff > 12) * 255\n    out = Image.fromarray(m.astype(np.uint8))\n    out = out.resize((im.width*2, im.height*2), Image.LANCZOS)\n    out.save('tmp.png')\n    r = subprocess.run(['tesseract', 'tmp.png', '-', '--psm', '11'], capture_output=True, text=True)\n    txt = ' '.join(r.stdout.split())\n    words = re.findall(r'[A-Za-z0-9{}_@!]{3,}', txt)\n    if words:\n        allhits[f] = words\nfor f, w in allhits.items():\n    print(f, w)\nprint('frames with hits:', len(allhits), 'of', len(fs))\n", "path": "/home/ctfplayer/workspace/ocr_adapt.py"}
+[59] run_command cd /home/ctfplayer/workspace && timeout 290 python3 ocr_adapt.py 2>/dev/null
+[60] create_file {"content": "from PIL import Image\nimport numpy as np\n\na = np.array(Image.open('all/150.png').convert('L'))\nfor name, (x0, y0, x1, y1) in {\n    'card3': (144, 351, 488, 711),\n    'card4': (916, 399, 1381, 641),\n    'card5': (1406, 502, 1831, 739),\n    'card7': (103, 744, 386, 981),\n}.items():\n    crop = a[y0:y1, x0:x1]\n    vals, cnts = np.unique(crop, return_counts=True)\n    top = sorted(zip(cnts.tolist(), vals.tolist()), reverse=True)[:6]\n    print(name, 'shape', crop.shape, 'top values (count,val):', top)\n    # guess text = brightest cluster\n    thr = 195\n    m = crop > thr\n    print('  pixels >195:', m.sum())\n    ys, xs = np.where(m)\n    if len(xs):\n        print('  bbox', xs.min(), xs.max(), ys.min(), ys.max())\n        sub = m[ys.min():ys.max()+1, xs.min():xs.max()+1]\n        Image.fromarray((sub*255).astype(np.uint8)).resize((sub.shape[1]*2, sub.shape[0]*2), Image.LANCZOS).save(name+'_text.png')", "path": "/home/ctfplayer/workspace/cardtext.py"}
+[61] run_command cd /home/ctfplayer/workspace && python3 cardtext.py
+[62] run_command cd /home/ctfplayer/workspace && for f in card3_text.png card4_text.png card5_text.png card7_text.png; do echo "=== $f"; tesseract $f - --psm 6 2>/dev/null; tesseract $f - --psm 7 2>/dev/null; done
+[63] create_file {"content": "from PIL import Image\nimport numpy as np, subprocess, sys\n\nfn = sys.argv[1]\na = np.array(Image.open(fn).convert('L'))\nprint('bg pixel', a[540, 5], a[5, 5], 'corner', a[1079, 1919])\nmask = a < 60\nprint('dark pixels', mask.sum())\nfrom scipy import ndimage\nlab, n = ndimage.label(mask)\nsizes = ndimage.sum(mask, lab, range(1, n+1))\norder = np.argsort(sizes)[::-1]\nfor i in order[:15]:\n    comp = i + 1\n    ys, xs = np.where(lab == comp)\n    print('comp', comp, 'size', int(sizes[i]), 'bbox', xs.min(), xs.max(), ys.min(), ys.max())\n", "path": "/home/ctfplayer/workspace/dark.py"}
+[64] run_command cd /home/ctfplayer/workspace && python3 dark.py all/150.png && echo ==== && python3 pix.py all/150.png 144 351 488 711 195 | head -60
+[65] create_file {"content": "from PIL import Image\nimport numpy as np, sys\n\nfn = sys.argv[1]\nbox = [int(v) for v in sys.argv[2:6]]\nthr = int(sys.argv[6]) if len(sys.argv) > 6 else 195\nds = int(sys.argv[7]) if len(sys.argv) > 7 else 2\na = np.array(Image.open(fn).convert('L'))\ncrop = a[box[1]:box[3], box[0]:box[2]]\nm = crop > thr\nys, xs = np.where(m)\nif len(xs) == 0:\n    print(\"empty\")\n    sys.exit()\nsub = m[ys.min():ys.max()+1, xs.min():xs.max()+1]\nH, W = sub.shape\nprint(f\"# {fn} box={box} thr={thr} sub={sub.shape}\")\nfor y0 in range(0, H, ds):\n    row = ''\n    for x0 in range(0, W, ds):\n        blk = sub[y0:y0+ds, x0:x0+ds]\n        row += '#' if blk.any() else '.'\n    print(row)\n", "path": "/home/ctfplayer/workspace/show.py"}
+[66] run_command cd /home/ctfplayer/workspace && python3 show.py all/150.png 144 351 488 711 195 4
+[67] create_file {"content": "from PIL import Image\nimport numpy as np\n\na = np.array(Image.open('all/150.png').convert('L'))\nimport numpy as np\n# Crop the card and view the low-contrast text region between the two big shapes.\ncrop = a[351:711, 144:488]\n# normalize for viewing\nc = crop.astype(np.float32)\nlo, hi = np.percentile(c, 2), np.percentile(c, 98)\nprint(lo, hi)\nn = np.clip((c - lo) / (hi - lo) * 255, 0, 255).astype(np.uint8)\nImage.fromarray(n).resize((crop.shape[1]*2, crop.shape[0]*2), Image.LANCZOS).save('card3_norm.png')\n# Print quantized ascii with 4 levels\nfor y0 in range(0, 360, 6):\n    row = ''\n    for x0 in range(0, 344, 3):\n        v = crop[y0:y0+6, x0:x0+3].mean()\n        row += ' .:-=+*#%@'[min(9, int(v) * 10 // 256)]\n    print(f'{y0:3d} {row}')\n", "path": "/home/ctfplayer/workspace/card3_norm.py"}
+[68] run_command cd /home/ctfplayer/workspace && python3 card3_norm.py
+[69] create_file {"content": "from PIL import Image\nimport numpy as np, glob\nfrom scipy import ndimage\n\nfs = sorted(glob.glob('all/*.png'))\nout = []\nfor f in fs:\n    a = np.array(Image.open(f).convert('L'))\n    mask = a > 100\n    lab, n = ndimage.label(mask)\n    objs = ndimage.find_objects(lab)\n    comps = []\n    for i, sl in enumerate(objs):\n        ys, xs = sl\n        size = (lab[sl] == i+1).sum()\n        if size < 2000:\n            continue\n        comps.append((xs.start, xs.stop, ys.start, ys.stop, int(size)))\n    comps.sort()\n    out.append((f, comps))\n    if int(f.split('/')[-1].split('.')[0]) % 25 == 1:\n        print(f, len(comps))\n        for c in comps:\n            print('   ', c)\nimport json\njson.dump([(f, c) for f, c in out], open('tracks.json', 'w'))", "path": "/home/ctfplayer/workspace/tracks.py"}
+[70] run_command cd /home/ctfplayer/workspace && timeout 280 python3 tracks.py
+[72] create_file 
+[73] run_command cd /home/ctfplayer/workspace && python3 show.py all/151.png 104 744 386 981 200 2 | head -70
+[73] run_command cd /home/ctfplayer/workspace && python3 show.py all/001.png 30 469 422 728 200 2 | head -70
+[74] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np
+from PIL import Image
+a = np.array(Image.open('all/001.png').convert('L'))
+# corners/edges of the video: static or not? Compare frame 1 and 300.
+b = np.array(Image.open('all/300.png').convert('L'))
+d = np.abs(a.astype(int)-b.astype(int))
+print("max diff", d.max())
+ys,xs = np.where(d>50)
+print("pixels >50:", len(xs))
+# Sample the static text rows: check row y=40 for both
+print([ (x, int(a[40,x]), int(b[40,x])) for x in range(100,130)])
+EOF
+[75] create_file {"content": "from PIL import Image\nimport numpy as np, sys\n\nfn = sys.argv[1]\nbox = [int(v) for v in sys.argv[2:6]]\nds = int(sys.argv[6]) if len(sys.argv) > 6 else 2\na = np.array(Image.open(fn).convert('L'))\ncrop = a[box[1]:box[3], box[0]:box[2]].astype(np.int16)\n# find connected bright background (card) and put text where dark inside card\nfrom scipy import ndimage\ncard = crop > 120\nlab, n = ndimage.label(card)\nsizes = ndimage.sum(card, lab, range(1, n + 1))\nmain = int(np.argmax(sizes)) + 1\ncardmask = lab == main\n# fill holes: text is inside the card\nfilled = ndimage.binary_fill_holes(cardmask)\ntext = filled & ~cardmask\nprint(f\"# {fn} {box} card px={cardmask.sum()} text px={text.sum()}\")\nys, xs = np.where(text)\nif len(xs) == 0:\n    sys.exit()\ny0, y1, x0, x1 = ys.min(), ys.max(), xs.min(), xs.max()\nsub = text[y0:y1+1, x0:x1+1]\nH, W = sub.shape\nprint(f\"# text bbox in crop: x {x0}-{x1} y {y0}-{y1} shape {sub.shape}\")\nfor yy in range(0, H, ds):\n    row = ''\n    for xx in range(0, W, ds):\n        blk = sub[yy:yy+ds, xx:xx+ds]\n        row += '#' if blk.mean() > 0.4 else ('+' if blk.any() else '.')\n    print(row)\nnp.save('sub.npy', sub)\n", "path": "/home/ctfplayer/workspace/textmask.py"}
+[76] run_command cd /home/ctfplayer/workspace && python3 textmask.py all/151.png 104 744 386 981 2 | head -80
+[77] run_command cd /home/ctfplayer/workspace && python3 textmask.py all/150.png 144 351 488 711 2 | head -120
+[78] run_command cd /home/ctfplayer/workspace && python3 ascii.py mean.png 200
+[78] run_command cd /home/ctfplayer/workspace && python3 ascii.py range.png 200
+[79] create_file {"content": "from PIL import Image\nimport numpy as np\n\na = np.array(Image.open('all/150.png').convert('L'))\nfor name, (x0, y0, x1, y1) in {\n    'card3': (144, 351, 488, 711),\n    'card4': (916, 399, 1381, 641),\n    'card5': (1406, 502, 1831, 739),\n    'card7': (103, 744, 386, 981),\n    'card6': (636, 608, 876, 753),\n    'card9': (682, 872, 923, 1016),\n    'card1': (138, 0, 378, 79),\n    'card2': (1482, 26, 1722, 170),\n}.items():\n    crop = a[y0:y1, x0:x1]\n    print('=====', name, crop.shape)\n    vals, cnts = np.unique(crop, return_counts=True)\n    d = dict(zip(vals.tolist(), cnts.tolist()))\n    # find value cluster that is the \"text\" color: between bg and max\n    print(' distinct top:', sorted(d.items(), key=lambda kv: -kv[1])[:8])\n    # consider pixels with value between 195 and 212 as text\n    m = (crop >= 195) & (crop <= 212)\n    ys, xs = np.where(m)\n    if len(xs) == 0:\n        print('no text pixels')\n        continue\n    sub = m[ys.min():ys.max()+1, xs.min():xs.max()+1]\n    H, W = sub.shape\n    print(' text bbox', xs.min(), xs.max(), ys.min(), ys.max(), 'shape', sub.shape, 'count', m.sum())\n    ds = 2\n    for yy in range(0, H, ds):\n        row = ''\n        for xx in range(0, W, ds):\n            blk = sub[yy:yy+ds, xx:xx+ds]\n            row += '#' if blk.mean() > 0.5 else ('+' if blk.any() else '.')\n        print(row)", "path": "/home/ctfplayer/workspace/cardtext_vals.py"}
+[80] run_command cd /home/ctfplayer/workspace && python3 cardtext_vals.py 2>&1 | head -150
+[81] create_file {"content": "from PIL import Image\nimport numpy as np\n\na = np.array(Image.open('all/150.png').convert('L'))\nfor name, (x0, y0, x1, y1) in {\n    'card3': (144, 351, 488, 711),\n    'card4': (916, 399, 1381, 641),\n    'card5': (1406, 502, 1831, 739),\n    'card7': (103, 744, 386, 981),\n    'card6': (636, 608, 876, 753),\n    'card9': (682, 872, 923, 1016),\n}.items():\n    crop = a[y0 + 12:y1 - 12, x0 + 12:x1 - 12]\n    vals, cnts = np.unique(crop, return_counts=True)\n    d = sorted(zip(cnts.tolist(), vals.tolist()), reverse=True)\n    print('=====', name, crop.shape, 'top:', d[:10], 'min', crop.min(), 'max', crop.max())\n    # values not in main cluster\n    mainv = d[0][1]\n    other = [(int(v), int(c)) for c, v in d if abs(int(v) - mainv) > 15]\n    other.sort(key=lambda t: -t[1])\n    print('  other values:', other[:15])", "path": "/home/ctfplayer/workspace/interior.py"}
+[82] run_command cd /home/ctfplayer/workspace && python3 interior.py
+[83] create_file {"content": "from PIL import Image\nimport numpy as np\n\na = np.array(Image.open('all/150.png').convert('L'))\ncrop = a[351:711, 144:488]\n# Text = pixels significantly brighter than card bg (~185)\nm = crop > 200\nseg = m[88:339, :]\nys, xs = np.where(seg)\nprint('text bbox', xs.min(), xs.max(), ys.min(), ys.max(), 'count', seg.sum())\narr = seg[ys.min():ys.max()+1, xs.min():xs.max()+1]\nprint('shape', arr.shape)\n# find connected components (letters) and print bounding boxes\nfrom scipy import ndimage\nlab, n = ndimage.label(arr)\nprint('components', n)\nobjs = ndimage.find_objects(lab)\ncomps = []\nfor i, sl in enumerate(objs):\n    yy, xx = sl\n    size = (lab[sl] == i+1).sum()\n    comps.append((xx.start, xx.stop, yy.start, yy.stop, int(size)))\ncomps.sort()\nfor c in comps:\n    print(c)\n", "path": "/home/ctfplayer/workspace/letters.py"}
+[84] run_command cd /home/ctfplayer/workspace && python3 letters.py
+[85] run_command cd /home/ctfplayer/workspace && python3 show.py all/150.png 144 351 488 711 200 1 | sed -n '1,145p' | cut -c1-160
+[86] run_command cd /home/ctfplayer/workspace && python3 ascii_crop.py all/150.png 144 351 488 500 120 && echo "=====F510" && python3 ascii_crop.py all/150.png 144 511 488 590 120 && echo "=====F600" && python3 ascii_crop.py all/150.png 144 600 488 700 120
+[87] create_file {"content": "from PIL import Image\nimport numpy as np\n\nim = Image.open('all/150.png').convert('RGB')\na = np.array(im)\nprint(a.shape)\n# unique colors overall\ncols, counts = np.unique(a.reshape(-1, 3), axis=0, return_counts=True)\norder = np.argsort(counts)[::-1]\nprint(\"num unique colors\", len(cols))\nfor i in order[:25]:\n    print(cols[i].tolist(), int(counts[i]))", "path": "/home/ctfplayer/workspace/colors.py"}
+[88] run_command cd /home/ctfplayer/workspace && python3 colors.py
+[91] create_file {"content": "data = open('/home/ctfplayer/ctf_files/finderskeepers.mp4', 'rb').read()\n\n# 1) Analyze XMP packet whitespace padding\nstart = 0x1175\nsize = 3483\npayload = data[start+24:start+size]\ntxt = payload.decode('latin1')\nprint(\"packet length\", len(txt))\nprint(\"last 400 chars repr:\")\nprint(repr(txt[-400:]))\nprint()\n# Count whitespace runs after last '?>'\nend_marker = \"<?xpacket end='w'?>\"\ni = txt.find(end_marker)\nprint(\"end marker pos\", i, \"of\", len(txt))\ntail = txt[i+len(end_marker):]\nprint(\"tail len\", len(tail), \"repr start\", repr(tail[:100]))\nprint(\"tail counts: spaces\", tail.count(' '), \"tabs\", tail.count('\\t'), \"newlines\", tail.count('\\n'))\n# before end marker: look at gap between </x:xmpmeta> and <?xpacket end\nj = txt.find('</x:xmpmeta>')\nprint(\"xmpmeta close\", j)\ngap = txt[j+len('</x:xmpmeta>'):i]\nprint(\"gap repr\", repr(gap))", "path": "/home/ctfplayer/workspace/ws.py"}
+finished: aborted reason=aborted rounds=91 cost=$0.0911 transcript=C:\Users\Dingus\csaw26_llm_ctf\logs\evals\20261109-214412__eval\01__finders keepers\lane-3\20261109-220415__crypto_finders_keepers_main_deepseek_deepseek-v4_1-flash.json

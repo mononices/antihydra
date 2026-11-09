@@ -1,0 +1,133 @@
+[01] run_command ls -la /home/ctfplayer/ctf_files/ && cat /home/ctfplayer/ctf_files/README.md
+[01] run_command cat /home/ctfplayer/ctf_files/files/pubkey.txt; echo "---"; cat /home/ctfplayer/ctf_files/files/ciphertext.txt
+[02] run_command cat /tools.txt 2>/dev/null | head -100; echo ---; which sage python3 gp pari fplll; python3 -c "import fpylll; print('fpylll', fpylll.__version__)" 2>&1; python3 -c "import sympy; print('sympy', sympy.__version__)" 2>&1
+[02] run_command python3 - <<'EOF'
+from math import gcd
+pk=[int(x) for x in open('/home/ctfplayer/ctf_files/files/pubkey.txt') if not x.startswith('#') and x.strip()]
+ct=[int(x) for x in open('/home/ctfplayer/ctf_files/files/ciphertext.txt') if not x.startswith('#') and x.strip()]
+print(len(pk), len(ct))
+print('max bits pk', max(pk).bit_length(), 'min', min(pk).bit_length())
+print('ct bits', [c.bit_length() for c in ct])
+print('sum bits', sum(pk).bit_length())
+g=0
+for x in pk: g=gcd(g,x)
+print('gcd pk', g)
+import statistics
+print('first 5', pk[:5])
+EOF
+[03] create_file {"path": "/home/ctfplayer/workspace/solve.sage", "content": "import re\n\ndef load(path):\n    vals=[]\n    for line in open(path):\n        line=line.strip()\n        if not line or line.startswith('#'): continue\n        vals.append(int(line))\n    return vals\n\npk = load('/home/ctfplayer/ctf_files/files/pubkey.txt')\ncts = load('/home/ctfplayer/ctf_files/files/ciphertext.txt')\nn = len(pk)\nprint(\"n =\", n, \"density =\", float(n)/max(pk).bit_length())\n\ndef solve_block(t, K=None):\n    if K is None:\n        K = 1 << 20\n    # basis: rows i (0..n-1): e_i*2 in first n cols, a_i*K in last\n    # row n: all ones in first n cols, t*K in last\n    B = matrix(ZZ, n+1, n+1)\n    for i in range(n):\n        B[i,i] = 2\n        B[i,n] = pk[i]*K\n    for j in range(n):\n        B[n,j] = 1\n    B[n,n] = t*K\n    L = B.LLL()\n    for row in L.rows():\n        if all(abs(row[j])==1 for j in range(n)) and row[n]==0:\n            bits = [1 if row[j]==1 else 0 for j in range(n)]\n            # verify\n            if sum(pk[j]*bits[j] for j in range(n)) == t:\n                return bits\n    return None\n\nflag_bytes = b''\nfor idx,t in enumerate(cts):\n    bits = None\n    for K in [1<<10, 1<<20, 1<<40, 1, 1<<5]:\n        bits = solve_block(t, K)\n        if bits is not None: break\n    if bits is None:\n        print(\"block\",idx,\"FAILED\")\n        continue\n    # MSB-first within each byte, bit i -> pubkey[i]\n    bs = bytes(int(''.join(str(b) for b in bits[i*8:(i+1)*8]),2) for i in range(9))\n    print(\"block\",idx,bs)\n    flag_bytes += bs\n\nprint(flag_bytes)\n"}
+[04] run_command cd /home/ctfplayer/workspace && timeout 600 sage solve.sage
+[05] run_command cd /home/ctfplayer/workspace && timeout 600 sage -c "
+from sage.all import *
+def load(path):
+    return [int(l) for l in open(path) if l.strip() and not l.startswith('#')]
+pk=load('/home/ctfplayer/ctf_files/files/pubkey.txt')
+ct=load('/home/ctfplayer/ctf_files/files/ciphertext.txt')
+n=len(pk); t=ct[0]
+for K in [1, 2**10, 2**20]:
+    B=matrix(ZZ,n+1,n+1)
+    for i in range(n):
+        B[i,i]=2; B[i,n]=pk[i]*K
+    for j in range(n): B[n,j]=1
+    B[n,n]=t*K
+    L=B.LLL()
+    print('K',K)
+    for row in L.rows()[:5]:
+        nz=sum(1 for j in range(n) if abs(row[j])==1)
+        mx=max(abs(row[j]) for j in range(n))
+        print(' last',row[n], 'ones',nz,'max',mx,'norm',float(row.norm()))
+"
+[06] run_command cd /home/ctfplayer/workspace && timeout 600 sage -c "
+from sage.all import *
+def load(p): return [int(l) for l in open(p) if l.strip() and not l.startswith('#')]
+pk=load('/home/ctfplayer/ctf_files/files/pubkey.txt'); n=len(pk); t=load('/home/ctfplayer/ctf_files/files/ciphertext.txt')[0]
+B=matrix(ZZ,n+1,n+1)
+for i in range(n):
+    B[i,i]=2; B[i,n]=pk[i]
+for j in range(n): B[n,j]=1
+B[n,n]=t
+L=B.LLL()
+for row in L.rows()[:10]:
+    print([int(x) for x in row], 'norm', float(row.norm()))
+"
+[07] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+pk=[int(l) for l in open('/home/ctfplayer/ctf_files/files/pubkey.txt') if l.strip() and not l.startswith('#')]
+# verify printed relation
+c={1:-4,6:4,7:-2,9:-4,10:2}
+print(sum(pk[i]*v for i,v in c.items()))
+# gcd of differences
+from math import gcd
+d=0
+for i in range(len(pk)):
+    d=gcd(d, pk[i]-pk[0])
+print('gcd diffs', d, d.bit_length())
+# differences among consecutive
+print([pk[i+1]-pk[i] for i in range(5)])
+EOF
+[08] run_command cd /home/ctfplayer/workspace && timeout 600 sage -c "
+from sage.all import *
+def load(p): return [int(l) for l in open(p) if l.strip() and not l.startswith('#')]
+pk=load('/home/ctfplayer/ctf_files/files/pubkey.txt'); n=len(pk); t=load('/home/ctfplayer/ctf_files/files/ciphertext.txt')[0]
+B=matrix(ZZ,n+1,n+1)
+for i in range(n):
+    B[i,i]=2; B[i,n]=pk[i]*2**30
+for j in range(n): B[n,j]=1
+B[n,n]=t*2**30
+L=B.LLL()
+for r in range(6):
+    row=L.rows()[r]
+    nz=[(j,int(row[j])) for j in range(n) if row[j]!=0]
+    val=sum(row[j]*pk[j] for j in range(n)) + row[n]*t
+    print('row',r,'last',row[n],'nonzero',nz,'sumcheck',int(val/2**30) if row[n]==0 else int(row[n]))
+"
+[09] record_finding {"text": "Challenge: 72-element knapsack (96-bit entries), 7 ciphertexts (9 bytes per block, MSB-first per byte). Density 0.75. Naive LO lattice (2I | a) + (1...1 | t) LLL returns only short kernel relations among a_i (norm ~8), NOT the 2s-1 solution (norm sqrt72=8.49). Files: ctf_files/files/pubkey.txt, ciphertext.txt.", "kind": "fact"}
+[09] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import z3, time
+pk=[int(l) for l in open('/home/ctfplayer/ctf_files/files/pubkey.txt') if l.strip() and not l.startswith('#')]
+cts=[int(l) for l in open('/home/ctfplayer/ctf_files/files/ciphertext.txt') if l.strip() and not l.startswith('#')]
+n=len(pk)
+def solve(t, prefix=b'', printable=True, timeout_ms=120000):
+    s=z3.Solver(); s.set('timeout', timeout_ms)
+    by=[z3.BitVec(f'b{i}',8) for i in range(9)]
+    for b in by: s.add(z3.UGE(b,0x20), z3.ULE(b,0x7e))
+    for k,c in enumerate(prefix): s.add(by[k]==c)
+    terms=[]
+    for i,a in enumerate(pk):
+        bit=(by[i//8] >> (7-(i%8))) & 1
+        terms.append(a*z3.ZeroExt(64,bit))
+    s.add(z3.Sum(terms)==t)
+    r=s.check()
+    if r==z3.sat:
+        m=s.model(); return bytes(m.eval(b,model_completion=True).as_long() for b in by)
+    return r
+t0=time.time()
+print(solve(cts[0], prefix=b'csaw{', timeout_ms=60000), time.time()-t0)
+EOF
+[10] run_command cd /home/ctfplayer/workspace && cat > z3solve.py <<'EOF'
+import z3, time
+pk=[int(l) for l in open('/home/ctfplayer/ctf_files/files/pubkey.txt') if l.strip() and not l.startswith('#')]
+cts=[int(l) for l in open('/home/ctfplayer/ctf_files/files/ciphertext.txt') if l.strip() and not l.startswith('#')]
+def solve(t, prefix=b'', lo=0x20, hi=0x7e, timeout_ms=300000):
+    s=z3.Solver(); s.set('timeout', timeout_ms)
+    by=[z3.BitVec(f'b{i}',8) for i in range(9)]
+    for b in by: s.add(z3.UGE(b,lo), z3.ULE(b,hi))
+    for k,c in enumerate(prefix): s.add(by[k]==c)
+    terms=[a*z3.ZeroExt(64,(by[i//8] >> (7-(i%8))) & 1) for i,a in enumerate(pk)]
+    s.add(z3.Sum(terms)==t)
+    r=s.check()
+    if r==z3.sat:
+        m=s.model(); return bytes(m.eval(b,model_completion=True).as_long() for b in by)
+    return str(r)
+out=b''
+KNOWN={0:b'csaw{LLL_'}
+for i,t in enumerate(cts):
+    t0=time.time()
+    p=solve(t, prefix=KNOWN.get(i,b''), timeout_ms=240000)
+    print(i,p, round(time.time()-t0,1), flush=True)
+    if isinstance(p,bytes):
+        out+=p
+        # next block guess: extend prefix? keep printable, rely on natural uniqueness
+print(out)
+EOF
+timeout 1700 python3 z3solve.py
+finished: aborted reason=aborted rounds=10 cost=$0.0065 transcript=C:\Users\Dingus\csaw26_llm_ctf\logs\evals\20261109-214412__eval\04__Secret Treaties\lane-3\20261109-222510__crypto_Secret_Treaties_main_deepseek_deepseek-v4_1-flash.json

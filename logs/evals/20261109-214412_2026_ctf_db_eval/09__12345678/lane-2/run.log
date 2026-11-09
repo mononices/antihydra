@@ -1,0 +1,1100 @@
+[01] run_command cd /home/ctfplayer/ctf_files && ls -la && file * && xxd -l 256 "12345678 (1).wav"
+[02] run_command cat /tools.txt; which ffmpeg sox python3 audacity sonic-visualiser 2>/dev/null; python3 -c "import numpy, scipy, matplotlib; print('ok')"
+[03] run_command cd /home/ctfplayer/workspace && cp "/home/ctfplayer/ctf_files/12345678 (1).wav" chal.wav && soxi chal.wav && sox chal.wav -n spectrogram -o spec_full.png -x 2000 -y 1025 -z 100 2>&1; ls -la
+[04] run_command cd /home/ctfplayer/workspace && tesseract spec_full.png stdout 2>/dev/null | head -50; python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav')
+n=w.getnframes()
+d=np.frombuffer(w.readframes(n),dtype=np.int16)
+d=d.reshape(-1,2)
+print(d.shape, d.min(), d.max())
+print('L R equal frac', np.mean(d[:,0]==d[:,1]))
+print('L R diff max', np.abs(d[:,0].astype(int)-d[:,1]).max())
+# LSB stats
+for ch in range(2):
+    lsb=d[:,ch]&1
+    print('ch',ch,'lsb mean',lsb.mean())
+# check LSB of left as bytes
+lsb=(d[:,0]&1).astype(np.uint8)
+packed=np.packbits(lsb)
+print(packed[:64])
+print(b''.join(bytes([b]) for b in packed[:200] if 32<=b<127))
+EOF
+[05] run_command cd /home/ctfplayer/workspace && identify spec_full.png && tesseract spec_full.png stdout --psm 11 2>/dev/null | head -80
+[06] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=w.getframerate()
+d=np.frombuffer(w.readframes(n),dtype=np.int16).reshape(-1,2).astype(np.float64)
+mono=d.mean(axis=1)
+# overall spectrum
+for ch,name in [(0,'L'),(1,'R'),(2,'M')]:
+    x = mono if ch==2 else d[:,ch]
+    X=np.abs(np.fft.rfft(x[:sr*10]))
+    f=np.fft.rfftfreq(sr*10,1/sr)
+    idx=np.argsort(X)[-20:][::-1]
+    print(name, sorted([(round(f[i],1),round(X[i]/1e6,2)) for i in idx])[:20])
+EOF
+[07] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=w.getframerate()
+d=np.frombuffer(w.readframes(n),dtype=np.int16).reshape(-1,2).astype(np.float64)
+for ch in range(2):
+    x=d[:,ch]
+    print('ch',ch,'rms',np.sqrt((x**2).mean()),'max',np.abs(x).max(),'nonzero frac',np.mean(x!=0))
+# envelope over 50ms windows
+win=int(sr*0.05)
+for ch in range(2):
+    x=d[:,ch]
+    nw=len(x)//win
+    rms=np.sqrt((x[:nw*win].reshape(nw,win)**2).mean(axis=1))
+    print('ch',ch,'rms windows first 100:', np.round(rms[:100],1))
+EOF
+[08] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=w.getframerate()
+d=np.frombuffer(w.readframes(n),dtype=np.int16).reshape(-1,2).astype(np.float64)
+x=d[:,0]
+win=int(sr*0.05); nw=len(x)//win
+rms=np.sqrt((x[:nw*win].reshape(nw,win)**2).mean(axis=1))
+# print compact run-length of loud/quiet
+thr=100
+state=rms>thr
+runs=[]
+start=0
+for i in range(1,len(state)):
+    if state[i]!=state[i-1]:
+        runs.append((state[i-1],start,i,round(rms[start:i].mean(),1)))
+        start=i
+runs.append((state[-1],start,len(state),round(rms[start:].mean(),1)))
+for r in runs[:80]:
+    print(r[0], f"{r[1]*0.05:.2f}-{r[2]*0.05:.2f}", r[3])
+print('total runs',len(runs))
+EOF
+[09] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=w.getframerate()
+d=np.frombuffer(w.readframes(n),dtype=np.int16).reshape(-1,2).astype(np.float64)
+x=d[:,0]
+def analyze(t0,t1,label):
+    a=int(t0*sr); b=int(t1*sr)
+    seg=x[a:b]
+    X=np.abs(np.fft.rfft(seg*np.hanning(len(seg))))
+    f=np.fft.rfftfreq(len(seg),1/sr)
+    idx=np.argsort(X)[-10:][::-1]
+    print(label, f"{t0}-{t1}", sorted([(round(f[i],1),round(X[i]/1e3,1)) for i in idx], key=lambda z:-z[1])[:8])
+analyze(3.5,4.3,'tone1')
+analyze(5.45,6.05,'tone2')
+analyze(7.1,7.65,'tone3')
+analyze(8.8,9.35,'tone4')
+analyze(10.3,10.95,'tone5')
+analyze(11.9,12.65,'tone6')
+analyze(13.8,14.25,'tone7')
+analyze(14.3,14.8,'tone7b')
+analyze(15.95,16.5,'tone8')
+analyze(17.45,18.15,'tone9')
+analyze(22.7,24.15,'tone10')
+EOF
+[10] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=w.getframerate()
+d=np.frombuffer(w.readframes(n),dtype=np.int16).reshape(-1,2)
+r=d[:,1]
+print('unique values count', len(np.unique(r)))
+vals,counts=np.unique(r,return_counts=True)
+print(list(zip(vals[:40],counts[:40])))
+print('...')
+print(list(zip(vals[-20:],counts[-20:])))
+print('mean',r.mean(),'std',r.std())
+# autocorrelation of right channel
+rr=r.astype(np.float64)-r.mean()
+ac=np.correlate(rr[:200000],rr[:200000],'full')[199999:199999+50]
+print('autocorr',np.round(ac/ac[0],3))
+EOF
+[11] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=w.getframerate()
+d=np.frombuffer(w.readframes(n),dtype=np.int16).reshape(-1,2)
+r=d[:,1].astype(np.float64)
+# highpass: difference
+diff=np.diff(r)
+print('diff rms',np.sqrt((diff**2).mean()))
+# spectrum of full right channel
+X=np.abs(np.fft.rfft(r))
+f=np.fft.rfftfreq(len(r),1/sr)
+# band energies
+bands=[(0,100),(100,500),(500,2000),(2000,5000),(5000,10000),(10000,15000),(15000,20000),(20000,22050)]
+for lo,hi in bands:
+    m=(f>=lo)&(f<hi)
+    print(lo,hi,round(np.sqrt((X[m]**2).mean()),1))
+idx=np.argsort(X)[-20:][::-1]
+print([(round(f[i],1),round(X[i],1)) for i in idx])
+EOF
+[12] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=w.getframerate()
+d=np.frombuffer(w.readframes(n),dtype=np.int16).reshape(-1,2)
+r=d[:,1].astype(np.float64)
+# STFT, look for constant tones over time
+N=4096; H=2048
+frames=[]
+for i in range(0,len(r)-N,H):
+    seg=r[i:i+N]*np.hanning(N)
+    frames.append(np.abs(np.fft.rfft(seg)))
+F=np.array(frames)
+f=np.fft.rfftfreq(N,1/sr)
+# find frequencies that are consistently strong
+med=np.median(F,axis=0)
+idx=np.argsort(med)[-30:][::-1]
+print([(round(f[i],1),round(med[i],0)) for i in idx])
+# temporal variation of top freq
+top=np.argmax(med)
+print('top freq',f[top])
+print(np.round(F[:,top]/1e3,1))
+EOF
+[13] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=w.getframerate()
+d=np.frombuffer(w.readframes(n),dtype=np.int16).reshape(-1,2)
+r=d[:,1].astype(np.float64)
+N=8192; H=4096
+F=[]
+for i in range(0,len(r)-N,H):
+    seg=r[i:i+N]*np.hanning(N)
+    F.append(np.abs(np.fft.rfft(seg)))
+F=np.array(F)
+f=np.fft.rfftfreq(N,1/sr)
+med=np.median(F,axis=0)
+idx=np.argsort(med)[-40:][::-1]
+print([(round(f[i],1),round(med[i],0)) for i in idx])
+EOF
+[14] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=w.getframerate()
+d=np.frombuffer(w.readframes(n),dtype=np.int16).reshape(-1,2)
+r=d[:,1].astype(np.float64)
+# spectrogram of right channel in time
+N=2048; H=1024
+F=[]
+for i in range(0,len(r)-N,H):
+    seg=r[i:i+N]*np.hanning(N)
+    F.append(np.abs(np.fft.rfft(seg)))
+F=np.array(F)
+f=np.fft.rfftfreq(N,1/sr)
+# print energy per 0.5 sec in some bands
+for lo,hi in [(0,1000),(1000,4000),(4000,8000),(8000,12000),(12000,16000),(16000,22050)]:
+    m=(f>=lo)&(f<hi)
+    e=np.sqrt((F[:,m]**2).mean(axis=1))
+    step=int(0.5*sr/H)
+    print(lo,hi,np.round(e[::step],0))
+EOF
+[15] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=w.getframerate()
+d=np.frombuffer(w.readframes(n),dtype=np.int16).reshape(-1,2)
+r=d[:,1].astype(np.float64)
+# highpass via FFT
+R=np.fft.rfft(r)
+f=np.fft.rfftfreq(len(r),1/sr)
+R[f<15000]=0
+hp=np.fft.irfft(R,len(r))
+np.save('r_hp.npy',hp)
+# envelope of hp
+win=int(sr*0.01); nw=len(hp)//win
+rms=np.sqrt((hp[:nw*win].reshape(nw,win)**2).mean(axis=1))
+print('hp rms',np.sqrt((hp**2).mean()))
+print(np.round(rms[:200],1))
+EOF
+[16] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=w.getframerate()
+d=np.frombuffer(w.readframes(n),dtype=np.int16).reshape(-1,2)
+r=d[:,1].astype(np.float64)
+# find where energy starts (right channel)
+win=int(sr*0.01); nw=len(r)//win
+rms=np.sqrt((r[:nw*win].reshape(nw,win)**2).mean(axis=1))
+idx=np.where(rms>20)[0]
+print('first loud',idx[0]*0.01,'last loud',idx[-1]*0.01)
+# print rms around 24-34s
+print(np.round(rms[2400:],0))
+EOF
+[17] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=w.getframerate()
+d=np.frombuffer(w.readframes(n),dtype=np.int16).reshape(-1,2)
+r=d[:,1].astype(np.float64)
+win=int(sr*0.01); nw=len(r)//win
+rms=np.sqrt((r[:nw*win].reshape(nw,win)**2).mean(axis=1))
+for i in range(2400,len(rms)):
+    print(i*0.01, round(rms[i],0))
+EOF
+[18] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=w.getframerate()
+d=np.frombuffer(w.readframes(n),dtype=np.int16).reshape(-1,2)
+r=d[:,1]
+a=int(23.95*sr); b=int(24.15*sr)
+print(r[a:b])
+print(d[a:b,0])
+EOF
+[19] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=w.getframerate()
+d=np.frombuffer(w.readframes(n),dtype=np.int16).reshape(-1,2)
+a=int(23.95*sr); b=int(24.16*sr)
+for i in range(a,b,10):
+    print(i, d[i,0], d[i,1], d[i,0]-d[i,1])
+EOF
+[20] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=w.getframerate()
+d=np.frombuffer(w.readframes(n),dtype=np.int16).reshape(-1,2)
+r=d[:,1].astype(np.float64)
+N=1024; H=256
+t0=int(22.5*sr); t1=int(33*sr)
+F=[];T=[]
+for i in range(t0,t1-N,H):
+    seg=r[i:i+N]*np.hanning(N)
+    F.append(np.abs(np.fft.rfft(seg))); T.append(i/sr)
+F=np.array(F); T=np.array(T)
+f=np.fft.rfftfreq(N,1/sr)
+# for each frame, find peaks
+for k in range(0,len(F),8):
+    row=F[k]
+    idx=np.argsort(row)[-6:][::-1]
+    print(round(T[k],2), [(round(f[i],0), round(row[i]/1e3,1)) for i in idx])
+EOF
+[21] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=w.getframerate()
+d=np.frombuffer(w.readframes(n),dtype=np.int16).reshape(-1,2)
+r=d[:,1].astype(np.float64)
+# zoom on 25.0-25.7 in time domain
+a=int(25.0*sr); b=int(25.7*sr)
+for i in range(a,b,200):
+    print(round(i/sr,3), int(r[i]))
+EOF
+[22] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=w.getframerate()
+d=np.frombuffer(w.readframes(n),dtype=np.int16).reshape(-1,2)
+L=d[:,0].astype(np.float64); R=d[:,1].astype(np.float64)
+# cross-correlate R with L
+from numpy.fft import rfft, irfft
+N=len(L)
+size=1<<int(np.ceil(np.log2(2*N)))
+c=irfft(rfft(R,size)*np.conj(rfft(L,size)),size)
+c=np.concatenate([c[-N+1:],c[:N]])
+lags=np.arange(-N+1,N)
+i=np.argmax(np.abs(c))
+print('best lag',lags[i], 'value',c[i], 'norm', np.sqrt((L**2).sum()*(R**2).sum()))
+# top peaks
+idx=np.argsort(np.abs(c))[-10:][::-1]
+print([(int(lags[j]), int(c[j])) for j in idx])
+EOF
+[23] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=w.getframerate()
+d=np.frombuffer(w.readframes(n),dtype=np.int16).reshape(-1,2)
+L=d[:,0].astype(np.float64); R=d[:,1].astype(np.float64)
+diff=L-R
+print('diff stats', diff.min(), diff.max(), np.sqrt((diff**2).mean()), np.mean(diff))
+vals,counts=np.unique(diff,return_counts=True)
+print('top diffs', sorted(zip(counts,vals))[-20:])
+EOF
+[24] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=w.getframerate()
+d=np.frombuffer(w.readframes(n),dtype=np.int16).reshape(-1,2)
+L=d[:,0].astype(np.float64); R=d[:,1].astype(np.float64)
+diff=L-R
+# where is diff large?
+win=int(sr*0.05); nw=len(diff)//win
+rms=np.sqrt((diff[:nw*win].reshape(nw,win)**2).mean(axis=1))
+for i in range(len(rms)):
+    if rms[i]>50:
+        print(round(i*0.05,2), round(rms[i],0))
+EOF
+[25] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=w.getframerate()
+d=np.frombuffer(w.readframes(n),dtype=np.int16).reshape(-1,2)
+L=d[:,0].astype(np.float64); R=d[:,1].astype(np.float64)
+# check if R == L shifted by 1 sample in some regions
+print('L[1:]==R[:-1] frac', np.mean(L[1:]==R[:-1]))
+print('L[:-1]==R[1:] frac', np.mean(L[:-1]==R[1:]))
+# check where the two channels are identical
+eq=(L==R)
+print('identical frac', eq.mean())
+# find runs of identical
+runs=[]
+start=None
+for i in range(len(eq)):
+    if eq[i] and start is None: start=i
+    elif not eq[i] and start is not None:
+        runs.append((start,i)); start=None
+print('num runs',len(runs))
+print([(round(a/sr,2),round(b/sr,2)) for a,b in runs[:40]])
+EOF
+[26] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=w.getframerate()
+d=np.frombuffer(w.readframes(n),dtype=np.int16).reshape(-1,2)
+L=d[:,0].astype(np.float64); R=d[:,1].astype(np.float64)
+# compare spectra of L and R
+X=np.abs(np.fft.rfft(L)); Y=np.abs(np.fft.rfft(R))
+f=np.fft.rfftfreq(len(L),1/sr)
+for lo,hi in [(0,1000),(1000,4000),(4000,8000),(8000,12000),(12000,16000),(16000,22050)]:
+    m=(f>=lo)&(f<hi)
+    print(lo,hi,'L',round(np.sqrt((X[m]**2).mean()),0),'R',round(np.sqrt((Y[m]**2).mean()),0))
+# check diff and sum spectra
+D=np.abs(np.fft.rfft(L-R)); S=np.abs(np.fft.rfft(L+R))
+for lo,hi in [(0,1000),(1000,4000),(4000,8000),(8000,12000),(12000,16000),(16000,22050)]:
+    m=(f>=lo)&(f<hi)
+    print('diff',lo,hi,round(np.sqrt((D[m]**2).mean()),0),'sum',round(np.sqrt((S[m]**2).mean()),0))
+EOF
+[27] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=w.getframerate()
+d=np.frombuffer(w.readframes(n),dtype=np.int16).reshape(-1,2)
+L=d[:,0].astype(np.float64); R=d[:,1].astype(np.float64)
+# cross-correlate specific windows: left tone region vs right tone region
+def xc(a,b,maxlag=1000):
+    a=a-a.mean(); b=b-b.mean()
+    c=np.correlate(b,a,'full')
+    lags=np.arange(-len(a)+1,len(a))
+    m=np.abs(lags)<=maxlag
+    i=np.argmax(np.abs(c[m]))
+    return lags[m][i], c[m][i]/np.sqrt((a**2).sum()*(b**2).sum())
+# tone at 3.5-4.3 in L, right channel same time
+a=int(3.5*sr); b=int(4.3*sr)
+print('L vs R same window', xc(L[a:b],R[a:b],500))
+print('L vs R global', xc(L[::10],R[::10],100))
+EOF
+[28] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=w.getframerate()
+d=np.frombuffer(w.readframes(n),dtype=np.int16).reshape(-1,2)
+L=d[:,0].astype(np.float64); R=d[:,1].astype(np.float64)
+# Compare the diff (L-R) with R scaled
+# maybe R is a delayed version of L with gain
+for lag in [0,1,2,3,4,5,-1,-2,-3,-4,-5]:
+    if lag>=0:
+        a=L[lag:]; b=R[:len(R)-lag] if lag>0 else R
+    else:
+        a=L[:lag]; b=R[-lag:]
+    g=(a*b).sum()/(a*a).sum()
+    res=b-g*a
+    print(lag, round(g,4), round(np.sqrt((res**2).mean()),1))
+EOF
+[29] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=w.getframerate()
+d=np.frombuffer(w.readframes(n),dtype=np.int16).reshape(-1,2)
+L=d[:,0].astype(np.float64); R=d[:,1].astype(np.float64)
+# check if R is L with different gain per segment
+# look at covariance over 0.5 sec windows
+win=sr//2; nw=len(L)//win
+for i in range(nw):
+    a=L[i*win:(i+1)*win]; b=R[i*win:(i+1)*win]
+    if a.std()>1 and b.std()>1:
+        print(i*0.5, round(np.corrcoef(a,b)[0,1],3), round(a.std(),1), round(b.std(),1))
+EOF
+[30] run_command cd /home/ctfplayer/workspace && xxd chal.wav | tail -20 && python3 -c "
+d=open('chal.wav','rb').read()
+print(len(d))
+print(d[6064252:])
+"
+[31] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=w.getframerate()
+d=np.frombuffer(w.readframes(n),dtype=np.int16).reshape(-1,2)
+L=d[:,0].astype(np.float64); R=d[:,1].astype(np.float64)
+# region 22.5-24.2 both channels, check exact equality
+a=int(22.5*sr); b=int(24.2*sr)
+eq=(L[a:b]==R[a:b])
+print('eq frac',eq.mean())
+print('max abs diff', np.abs(L[a:b]-R[a:b]).max())
+print('mean abs diff', np.abs(L[a:b]-R[a:b]).mean())
+# histogram of diff
+vals,counts=np.unique((L[a:b]-R[a:b]),return_counts=True)
+print(sorted(zip(counts,vals))[-10:])
+EOF
+[32] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=w.getframerate()
+d=np.frombuffer(w.readframes(n),dtype=np.int16).reshape(-1,2)
+L=d[:,0].astype(np.float64); R=d[:,1].astype(np.float64)
+a=int(22.5*sr); b=int(24.2*sr)
+diff=(L[a:b]-R[a:b])
+print('diff mean',diff.mean(),'std',diff.std())
+# is diff correlated with R? or with derivative?
+print('corr diff,R',np.corrcoef(diff,R[a:b])[0,1])
+print('corr diff,L',np.corrcoef(diff,L[a:b])[0,1])
+print('corr diff,dR',np.corrcoef(diff[1:],np.diff(R[a:b]))[0,1])
+print('corr diff,dL',np.corrcoef(diff[1:],np.diff(L[a:b]))[0,1])
+# amplitude relationship
+print('corr diff,absR',np.corrcoef(diff,np.abs(R[a:b]))[0,1])
+EOF
+[33] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=w.getframerate()
+d=np.frombuffer(w.readframes(n),dtype=np.int16).reshape(-1,2)
+L=d[:,0].astype(np.float64); R=d[:,1].astype(np.float64)
+diff=L-R
+# check if diff is white noise everywhere or structured in time
+win=int(sr*0.01); nw=len(diff)//win
+rms=np.sqrt((diff[:nw*win].reshape(nw,win)**2).mean(axis=1))
+print('std of rms', rms.std(), 'mean', rms.mean())
+print(np.round(rms[:300],2))
+EOF
+[34] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave, matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+w=wave.open('chal.wav'); n=w.getnframes(); sr=w.getframerate()
+d=np.frombuffer(w.readframes(n),dtype=np.int16).reshape(-1,2)
+R=d[:,1].astype(np.float64)
+a=int(22.5*sr); b=int(34.4*sr)
+seg=R[a:b]
+plt.figure(figsize=(40,10))
+plt.specgram(seg, NFFT=1024, Fs=sr, noverlap=768, cmap='inferno')
+plt.ylim(0,8000)
+plt.savefig('spec_R_22_34.png',dpi=80,bbox_inches='tight')
+plt.close()
+plt.figure(figsize=(40,10))
+plt.specgram(seg, NFFT=4096, Fs=sr, noverlap=3072, cmap='inferno')
+plt.ylim(0,22050)
+plt.savefig('spec_R_22_34_wide.png',dpi=80,bbox_inches='tight')
+EOF
+ls -la *.png
+[35] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=w.getframerate()
+d=np.frombuffer(w.readframes(n),dtype=np.int16).reshape(-1,2)
+R=d[:,1].astype(np.float64)
+# examine 22.69 to 24.12 region: is it DTMF? find dominant freq per 20ms
+a=int(22.68*sr); b=int(24.13*sr)
+win=int(0.02*sr)
+for i in range(a,b-win,win):
+    seg=R[i:i+win]*np.hanning(win)
+    X=np.abs(np.fft.rfft(seg))
+    f=np.fft.rfftfreq(win,1/sr)
+    idx=np.argsort(X)[-8:][::-1]
+    print(round(i/sr,3), [(round(f[j]),round(X[j]/1e3,0)) for j in idx[:6]])
+EOF
+[36] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=w.getframerate()
+d=np.frombuffer(w.readframes(n),dtype=np.int16).reshape(-1,2)
+L=d[:,0].astype(np.float64); R=d[:,1].astype(np.float64)
+a=0; b=int(22.5*sr)
+r=R[a:b]
+print('R stats in 0-22.5:', r.min(), r.max(), r.mean(), r.std())
+vals,counts=np.unique(r,return_counts=True)
+print('unique',len(vals))
+print(list(zip(vals,counts))[:60])
+EOF
+[37] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=w.getframerate()
+d=np.frombuffer(w.readframes(n),dtype=np.int16).reshape(-1,2)
+L=d[:,0].astype(np.float64); R=d[:,1].astype(np.float64)
+def ascii_spec(x, t0=0, t1=None, fmax=8000, cols=160, rows=40, N=2048):
+    a=int(t0*sr); b=int(t1*sr) if t1 else len(x)
+    seg=x[a:b]
+    hop=max(1,(b-a)//cols)
+    frames=[]
+    for i in range(0,len(seg)-N,hop):
+        frames.append(np.abs(np.fft.rfft(seg[i:i+N]*np.hanning(N))))
+    F=np.array(frames).T
+    f=np.fft.rfftfreq(N,1/sr)
+    m=f<=fmax
+    F=F[m]
+    # downsample rows
+    idx=np.linspace(0,F.shape[0]-1,rows).astype(int)
+    Fd=F[idx]
+    # log scale
+    Fd=np.log1p(Fd)
+    Fd=Fd/ (Fd.max()+1e-9)
+    chars=' .:-=+*#%@'
+    for r in range(rows-1,-1,-1):
+        line=''.join(chars[min(9,int(v*9.999))] for v in Fd[r])
+        print(f"{int(f[idx[r]]):5d} |{line}")
+ascii_spec(L, 0, None, 8000, 160, 40)
+EOF
+[38] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=w.getframerate()
+d=np.frombuffer(w.readframes(n),dtype=np.int16).reshape(-1,2)
+L=d[:,0].astype(np.float64); R=d[:,1].astype(np.float64)
+seg=R[:int(22.5*sr)]
+X=np.abs(np.fft.rfft(seg)); f=np.fft.rfftfreq(len(seg),1/sr)
+for lo,hi in [(0,100),(100,1000),(1000,4000),(4000,8000),(8000,12000),(12000,16000),(16000,22050)]:
+    m=(f>=lo)&(f<hi)
+    print(lo,hi,round(np.sqrt((X[m]**2).mean()),1))
+idx=np.argsort(X)[-20:][::-1]
+print([(round(f[i],1),round(X[i],0)) for i in idx])
+# check distribution: white noise?
+print('kurtosis', ((seg-seg.mean())**4).mean()/seg.var()**2)
+EOF
+[39] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=w.getframerate()
+d=np.frombuffer(w.readframes(n),dtype=np.int16).reshape(-1,2)
+L=d[:,0].astype(np.float64); R=d[:,1].astype(np.float64)
+# maybe R = L quantized to fewer bits? Check ratio
+# fit R = a*L for loud segments
+a=int(22.7*sr); b=int(24.1*sr)
+x=L[a:b]; y=R[a:b]
+A=np.vstack([x,np.ones_like(x)]).T
+coef,res,rank,sv=np.linalg.lstsq(A,y,rcond=None)
+print('fit',coef)
+pred=A@coef
+print('residual std', (y-pred).std())
+# where are the residual largest?
+resid=y-pred
+idx=np.argsort(np.abs(resid))[-20:]
+print([(round(i/sr+22.7,3), round(resid[i],1)) for i in idx])
+EOF
+[40] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=w.getframerate()
+d=np.frombuffer(w.readframes(n),dtype=np.int16).reshape(-1,2)
+L=d[:,0].astype(np.float64); R=d[:,1].astype(np.float64)
+a=int(22.5*sr); b=int(24.2*sr)
+resid=(R[a:b]-L[a:b])
+# where resid nonzero, print structure
+nz=np.where(resid!=0)[0]
+print('nonzero count',len(nz),'of',b-a)
+# print first 300 samples of resid
+print(resid[:200].astype(int))
+EOF
+[41] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=w.getframerate()
+d=np.frombuffer(w.readframes(n),dtype=np.int16).reshape(-1,2)
+L=d[:,0].astype(np.float64); R=d[:,1].astype(np.float64)
+a=int(22.5*sr); b=int(24.2*sr)
+resid=(R[a:b]-L[a:b])
+print('corr resid with L', np.corrcoef(resid,L[a:b])[0,1])
+print('corr resid with L^2', np.corrcoef(resid,L[a:b]**2)[0,1])
+# maybe resid is L delayed?
+for lag in range(0,20):
+    print(lag, round(np.corrcoef(resid[lag:],L[a:b][:len(resid)-lag])[0,1],4))
+EOF
+[42] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=w.getframerate()
+d=np.frombuffer(w.readframes(n),dtype=np.int16).reshape(-1,2)
+L=d[:,0].astype(np.float64); R=d[:,1].astype(np.float64)
+a=int(22.5*sr); b=int(24.2*sr)
+resid=(R[a:b]-L[a:b])
+# check autocorrelation
+r=resid-resid.mean()
+ac=np.correlate(r[:20000],r[:20000],'full')[19999:19999+20]
+print(np.round(ac/ac[0],3))
+# spectrum
+X=np.abs(np.fft.rfft(r)); f=np.fft.rfftfreq(len(r),1/sr)
+for lo,hi in [(0,1000),(1000,4000),(4000,8000),(8000,12000),(12000,16000),(16000,22050)]:
+    m=(f>=lo)&(f<hi)
+    print(lo,hi,round(np.sqrt((X[m]**2).mean()),1))
+EOF
+[43] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=w.getframerate()
+d=np.frombuffer(w.readframes(n),dtype=np.int16).reshape(-1,2)
+L=d[:,0].astype(np.float64); R=d[:,1].astype(np.float64)
+a=int(22.5*sr); b=int(24.2*sr)
+resid=(R[a:b]-L[a:b])
+# maybe the residual is the "noise" added to L to make R, but with dithering
+# Check if there's data in the residual at specific frequency
+# High-pass residual and look at envelope
+from scipy.signal import butter, filtfilt
+bb,aa=butter(4,15000/(sr/2),'high')
+hp=filtfilt(bb,aa,resid)
+print('hp std',hp.std())
+win=int(sr*0.01)
+nw=len(hp)//win
+rms=np.sqrt((hp[:nw*win].reshape(nw,win)**2).mean(axis=1))
+print(np.round(rms[:100],1))
+EOF
+[44] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=w.getframerate()
+d=np.frombuffer(w.readframes(n),dtype=np.int16).reshape(-1,2)
+L=d[:,0].astype(np.float64); R=d[:,1].astype(np.float64)
+a=int(22.5*sr)
+# check R before 22.5: is it exactly a quantization of L?
+# maybe R = round(L/2^k)? Check unique values
+seg=L[:a]
+print('L unique in 0-22.5', len(np.unique(seg)))
+# For samples where L is small, what is R?
+for i in range(1000,1100):
+    print(int(L[i]), int(R[i]))
+EOF
+[45] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=w.getframerate()
+d=np.frombuffer(w.readframes(n),dtype=np.int16).reshape(-1,2)
+L=d[:,0].astype(np.float64); R=d[:,1].astype(np.float64)
+a=int(22.5*sr)
+seg=R[:a]
+# Check if R is a filtered version of L: fit FIR
+# Compute cross correlation of L and R in 0-22.5
+x=L[:a]; y=R[:a]
+x=x-x.mean(); y=y-y.mean()
+size=1<<int(np.ceil(np.log2(len(x)*2)))
+c=np.fft.irfft(np.fft.rfft(y,size)*np.conj(np.fft.rfft(x,size)),size)
+c=np.concatenate([c[-1000:],c[:1000]])
+lags=np.arange(-1000,1000)
+i=np.argmax(np.abs(c))
+print('best lag',lags[i], c[i]/np.sqrt((x**2).sum()*(y**2).sum()))
+print([(int(lags[j]), round(c[j]/1e6,1)) for j in np.argsort(np.abs(c))[-10:][::-1]])
+EOF
+[46] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=w.getframerate()
+d=np.frombuffer(w.readframes(n),dtype=np.int16).reshape(-1,2)
+L=d[:,0].astype(np.float64); R=d[:,1].astype(np.float64)
+a=int(22.5*sr)
+x=L[:a]; y=R[:a]
+# Fit an FIR model: y[n] = sum h[k] x[n-k]. Use least squares with 64 taps
+K=64
+X=np.zeros((len(x)-K,K))
+for k in range(K):
+    X[:,k]=x[K-k-1:len(x)-k-1]
+Y=y[K:]
+h,res,rank,sv=np.linalg.lstsq(X,Y,rcond=None)
+pred=X@h
+print('residual std', (Y-pred).std(), 'y std', Y.std())
+print(np.round(h,4))
+EOF
+[47] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=w.getframerate()
+d=np.frombuffer(w.readframes(n),dtype=np.int16).reshape(-1,2)
+L=d[:,0].astype(np.float64); R=d[:,1].astype(np.float64)
+a=int(22.5*sr)
+# maybe R is L rounded to nearest multiple of something? Check residuals mod
+# distribution of R values suggests small integers. Check if R has periodicity with L
+# Try: R = L - round(L)?? no.
+# Check if R == L mod 16? 
+for m in [2,4,8,16,32,64,128,256]:
+    print(m, np.mean((L[:a]%m)==(R[:a]%m)))
+EOF
+[48] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=w.getframerate()
+d=np.frombuffer(w.readframes(n),dtype=np.int16).reshape(-1,2)
+L=d[:,0].astype(np.float64); R=d[:,1].astype(np.float64)
+# Check if L and R are identical when R is loud (22.5+)
+a=int(22.5*sr)
+print('22.5+ identical frac', np.mean(L[a:]==R[a:]))
+# look at where they differ
+diff=L[a:]-R[a:]
+nz=np.where(diff!=0)[0]
+print('nonzero',len(nz),'of',len(diff))
+# The diff seems small. Maybe R was quantized to a coarser grid. Check R values in 22.5+
+vals,counts=np.unique(R[a:],return_counts=True)
+print('unique R values', len(vals))
+# check if all R values are multiples of 2
+print('even frac', np.mean(R[a:]%2==0))
+# check L values corresponding to same R
+EOF
+[49] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=w.getframerate()
+d=np.frombuffer(w.readframes(n),dtype=np.int16).reshape(-1,2)
+L=d[:,0].astype(np.float64); R=d[:,1].astype(np.float64)
+a=int(22.5*sr)
+# Look at R in 22.5+ where L is quiet: e.g. 24.5-25.0
+b=int(25.0*sr)
+for i in range(a,b,500):
+    print(round(i/sr,2), int(L[i]), int(R[i]))
+EOF
+[50] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=w.getframerate()
+d=np.frombuffer(w.readframes(n),dtype=np.int16).reshape(-1,2)
+L=d[:,0].astype(np.float64); R=d[:,1].astype(np.float64)
+# Try DTMF decode on R for 22.5-24.2
+dtmf_rows=[697,770,852,941]; dtmf_cols=[1209,1336,1477,1633]
+a=int(22.69*sr); b=int(24.13*sr)
+win=int(0.01*sr)
+res=[]
+for i in range(a,b-win,win):
+    seg=R[i:i+win]*np.hanning(win)
+    X=np.abs(np.fft.rfft(seg))
+    f=np.fft.rfftfreq(win,1/sr)
+    def e(freq):
+        m=(f>freq-15)&(f<freq+15)
+        return X[m].max() if m.any() else 0
+    rows=[e(x) for x in dtmf_rows]; cols=[e(x) for x in dtmf_cols]
+    r=np.argmax(rows); c=np.argmax(cols)
+    res.append((round(i/sr,2),dtmf_rows[r],dtmf_cols[c],round(rows[r],0),round(cols[c],0)))
+for x in res: print(x)
+EOF
+[51] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=w.getframerate()
+d=np.frombuffer(w.readframes(n),dtype=np.int16).reshape(-1,2)
+L=d[:,0].astype(np.float64); R=d[:,1].astype(np.float64)
+# Look at 24.15-25.0 (quiet)
+a=int(24.15*sr); b=int(25.0*sr)
+print('L rms', L[a:b].std(), 'R rms', R[a:b].std())
+# check if R has a pattern there
+print(R[a:a+200].astype(int))
+print(L[a:a+200].astype(int))
+EOF
+[52] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=w.getframerate()
+d=np.frombuffer(w.readframes(n),dtype=np.int16).reshape(-1,2)
+L=d[:,0].astype(np.float64); R=d[:,1].astype(np.float64)
+# Is the quiet part just dither? Look at R stats 24.2-25.1
+a=int(24.2*sr); b=int(25.1*sr)
+seg=R[a:b]
+print('mean',seg.mean(),'std',seg.std())
+vals,counts=np.unique(seg,return_counts=True)
+print(list(zip(vals,counts)))
+EOF
+[53] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=w.getframerate()
+d=np.frombuffer(w.readframes(n),dtype=np.int16).reshape(-1,2)
+L=d[:,0].astype(np.float64); R=d[:,1].astype(np.float64)
+# Check for steganography in LSB of L in the quiet region 24.2-25.1
+a=int(24.2*sr); b=int(25.1*sr)
+for ch,name in [(0,'L'),(1,'R')]:
+    x=d[a:b,ch]
+    lsb=(x&1).astype(np.uint8)
+    packed=np.packbits(lsb)
+    print(name, packed[:80])
+EOF
+[54] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import base64
+for s in ["Ml81dDNAMV8=","Ml81dDNAMV8"]:
+    try:
+        print(s, base64.b64decode(s))
+    except Exception as e:
+        print(s,e)
+d=open('chal.wav','rb').read()
+print(d[6064252:].hex())
+# find all non-audio chunks
+import struct
+i=12
+while i < len(d)-8:
+    cid=d[i:i+4]; sz=struct.unpack('<I',d[i+4:i+8])[0]
+    print(i, cid, sz)
+    if cid==b'data':
+        i += 8+sz
+    else:
+        print('  content:', d[i+8:i+8+sz])
+        i += 8+sz
+EOF
+[57] check_hints {}
+[58] run_command cd /home/ctfplayer/workspace && strings -n 4 chal.wav | tail -20; echo ---; python3 - <<'EOF'
+import re,base64
+d=open('chal.wav','rb').read()
+# search all printable runs
+for m in re.finditer(rb'[A-Za-z0-9+/=_@!$#%^&*\-]{6,}', d):
+    s=m.group()
+    print(m.start(), s)
+EOF
+[59] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave, matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+w=wave.open('chal.wav'); n=w.getnframes(); sr=w.getframerate()
+d=np.frombuffer(w.readframes(n),dtype=np.int16).reshape(-1,2)
+L=d[:,0].astype(np.float64); R=d[:,1].astype(np.float64)
+b=int(22.5*sr)
+for name,seg in [('L',L[:b]),('R',R[:b]),('LmR',L[:b]-R[:b]),('LpR',L[:b]+R[:b])]:
+    plt.figure(figsize=(30,10))
+    plt.specgram(seg, NFFT=2048, Fs=sr, noverlap=1024, cmap='inferno')
+    plt.ylim(0,22050); plt.title(name)
+    plt.savefig(f'spec_{name}_0_22.png',dpi=70,bbox_inches='tight')
+    plt.close()
+print('done')
+EOF
+ls -la spec_*
+[60] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=w.getframerate()
+d=np.frombuffer(w.readframes(n),dtype=np.int16).reshape(-1,2)
+L=d[:,0].astype(np.float64); R=d[:,1].astype(np.float64)
+# L noise floor spectrum in 0-3.4
+seg=L[:int(3.4*sr)]
+X=np.abs(np.fft.rfft(seg)); f=np.fft.rfftfreq(len(seg),1/sr)
+for lo,hi in [(0,200),(200,1000),(1000,4000),(4000,8000),(8000,12000),(12000,16000),(16000,22050)]:
+    m=(f>=lo)&(f<hi)
+    print(lo,hi,round(np.sqrt((X[m]**2).mean()),1))
+# check L quiet noise vs R noise correlation
+print('corr L,R 0-3.4', np.corrcoef(L[:int(3.4*sr)],R[:int(3.4*sr)])[0,1])
+# envelope of L 0-3.4 (any structure?)
+win=int(sr*0.02); nw=int(3.4*sr)//win
+rms=np.sqrt((L[:nw*win].reshape(nw,win)**2).mean(axis=1))
+print(np.round(rms,1))
+EOF
+[61] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=w.getframerate()
+d=np.frombuffer(w.readframes(n),dtype=np.int16).reshape(-1,2)
+L=d[:,0].astype(np.float64); R=d[:,1].astype(np.float64)
+# region 25-33 both identical-ish: use L
+a=int(24.0*sr); b=int(34.4*sr)
+seg=L[a:b]
+N=512; H=128
+frames=[]
+for i in range(0,len(seg)-N,H):
+    frames.append(np.abs(np.fft.rfft(seg[i:i+N]*np.hanning(N))))
+F=np.array(frames).T
+f=np.fft.rfftfreq(N,1/sr)
+print('shape',F.shape)
+# print coarse ASCII art of the spectrogram, log scale
+Fd=np.log1p(F)
+# normalize per whole
+Fd=Fd/(Fd.max()+1e-9)
+rows=48
+idx=np.linspace(0,F.shape[0]-1,rows).astype(int)
+chars=' .:-=+*#%@'
+for r in range(rows-1,-1,-1):
+    line=''.join(chars[min(9,int(v*9.999))] for v in Fd[idx[r]])
+    print(f"{int(f[idx[r]]):5d}|{line}")
+EOF
+[66] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=w.getframerate()
+d=np.frombuffer(w.readframes(n),dtype=np.int16).reshape(-1,2)
+L=d[:,0].astype(np.float64); R=d[:,1].astype(np.float64)
+S=L+R
+# save mono sum as wav for listening/inspection
+import wave as wv
+out=wv.open('sum.wav','wb'); out.setnchannels(1); out.setsampwidth(2); out.setframerate(sr)
+out.writeframes(np.clip(S,-32768,32767).astype(np.int16).tobytes()); out.close()
+# spectrum of sum
+X=np.abs(np.fft.rfft(S)); f=np.fft.rfftfreq(len(S),1/sr)
+for lo,hi in [(0,200),(200,1000),(1000,4000),(4000,8000),(8000,12000),(12000,16000),(16000,22050)]:
+    m=(f>=lo)&(f<hi)
+    print(lo,hi,round(np.sqrt((X[m]**2).mean()),1))
+# envelope of sum in 20ms
+win=int(sr*0.02); nw=len(S)//win
+rms=np.sqrt((S[:nw*win].reshape(nw,win)**2).mean(axis=1))
+print(np.round(rms[:200],0))
+EOF
+[67] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave, matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+from PIL import Image
+w=wave.open('chal.wav'); n=w.getnframes(); sr=w.getframerate()
+d=np.frombuffer(w.readframes(n),dtype=np.int16).reshape(-1,2)
+R=d[:int(22.5*sr),1].astype(np.float64)
+N=1024; H=64
+frames=[]
+for i in range(0,len(R)-N,H):
+    frames.append(np.abs(np.fft.rfft(R[i:i+N]*np.hanning(N))))
+F=np.array(frames).T
+f=np.fft.rfftfreq(N,1/sr)
+print(F.shape, f[-1])
+# band 15k-22k
+m=(f>=14000)
+B=F[m]
+print(B.shape)
+# normalize each row
+mu=B.mean(axis=1,keepdims=True); sd=B.std(axis=1,keepdims=True)+1e-9
+Bn=(B-mu)/sd
+img=np.clip(Bn,0,3)/3
+img=(img*255).astype(np.uint8)
+Image.fromarray(img[::-1]).save('R_band_14_22k.png')
+print('saved', img.shape)
+EOF
+identify R_band_14_22k.png
+[68] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+from PIL import Image
+w=wave.open('chal.wav'); n=w.getnframes(); sr=w.getframerate()
+d=np.frombuffer(w.readframes(n),dtype=np.int16).reshape(-1,2)
+R=d[:int(22.5*sr),1].astype(np.float64)
+N=256; H=64
+frames=[]
+for i in range(0,len(R)-N,H):
+    frames.append(np.abs(np.fft.rfft(R[i:i+N]*np.hanning(N))))
+F=np.array(frames).T
+f=np.fft.rfftfreq(N,1/sr)
+# print band energy per freq over time, look for structured lines
+# Check temporal correlation of each frequency bin
+Fc=F-F.mean(axis=1,keepdims=True)
+# look at variance across time vs mean
+mean=F.mean(axis=1); std=F.std(axis=1)
+# find bins with high relative variance
+rel=std/(mean+1e-9)
+idx=np.argsort(rel)[-30:][::-1]
+print([(round(f[i]),round(mean[i],0),round(std[i],0),round(rel[i],2)) for i in idx])
+EOF
+[69] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=w.getframerate()
+d=np.frombuffer(w.readframes(n),dtype=np.int16).reshape(-1,2)
+L=d[:,0].astype(np.float64); R=d[:,1].astype(np.float64)
+x=(L+R)/2
+N=8192; H=512
+f=np.fft.rfftfreq(N,1/sr)
+def hps(seg):
+    X=np.abs(np.fft.rfft(seg*np.hanning(len(seg))))
+    # limit to 100-2000 Hz fundamentals
+    best=None
+    for f0 in np.arange(80,1200,0.5):
+        s=0
+        for k in range(1,9):
+            fk=f0*k
+            if fk>=sr/2: break
+            i=int(round(fk/(sr/N)))
+            s+=X[max(0,i-1):i+2].max()
+        if best is None or s>best[1]: best=(f0,s)
+    return best[0]
+res=[]
+for i in range(0,len(x)-N,H):
+    t=i/sr
+    seg=x[i:i+N]
+    e=np.sqrt((seg**2).mean())
+    if e>20:
+        f0=hps(seg)
+    else:
+        f0=0
+    res.append((t,e,f0))
+# print compact: group by f0
+prev=None
+for t,e,f0 in res:
+    key = round(f0) if e>20 else 0
+    if key!=prev:
+        print(f"{t:7.2f} e={e:8.1f} f0={f0:7.1f}")
+        prev=key
+EOF
+[70] run_command cd /home/ctfplayer/workspace && timeout 10 pip download --no-deps -d /tmp/x nonexistentpkg 2>&1 | tail -3; python3 -c "import whisper" 2>&1 | tail -1; python3 -c "import vosk" 2>&1|tail -1; python3 -c "import speech_recognition" 2>&1|tail -1; which ffmpeg
+[71] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave
+w=wave.open('chal.wav'); n=w.getnframes(); sr=w.getframerate()
+d=np.frombuffer(w.readframes(n),dtype=np.int16).reshape(-1,2)
+x=d[:,0].astype(np.float64)  # L==R after 22.5
+a=int(24.9*sr); b=int(33.5*sr)
+seg=x[a:b]
+win=int(sr*0.005)
+nw=len(seg)//win
+rms=np.sqrt((seg[:nw*win].reshape(nw,win)**2).mean(axis=1))
+# threshold
+thr=8
+state=rms>thr
+runs=[]
+start=0
+for i in range(1,len(state)):
+    if state[i]!=state[i-1]:
+        runs.append((state[i-1],start,i)); start=i
+runs.append((state[-1],start,len(state)))
+print('runs:')
+for s,i,j in runs:
+    if s and j-i>1:
+        # dominant freq
+        seg2=seg[i*win:j*win]
+        X=np.abs(np.fft.rfft(seg2*np.hanning(len(seg2))))
+        f=np.fft.rfftfreq(len(seg2),1/sr)
+        m=f<4000
+        pk=f[m][np.argmax(X[m])]
+        print(f"ON  {24.9+i*0.005:6.2f}-{24.9+j*0.005:6.2f} dur={(j-i)*0.005:5.3f} rms={rms[i:j].mean():6.1f} peak={pk:7.1f}")
+    else:
+        print(f"off {24.9+i*0.005:6.2f}-{24.9+j*0.005:6.2f} dur={(j-i)*0.005:5.3f}")
+EOF
+[72] run_command cd /home/ctfplayer/workspace && pip install vosk 2>&1 | tail -3
+[73] run_command cd /home/ctfplayer/workspace && timeout 280 bash -c 'curl -sL -o model.zip https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip && ls -la model.zip && unzip -q model.zip && ls'
+[74] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import wave, numpy as np, json, subprocess
+from vosk import Model, KaldiRecognizer
+# prepare 16k mono wav
+subprocess.run(['ffmpeg','-y','-loglevel','error','-i','chal.wav','-ac','1','-ar','16000','-f','wav','chal16k.wav'])
+wf=wave.open('chal16k.wav')
+model=Model('vosk-model-small-en-us-0.15')
+rec=KaldiRecognizer(model,16000)
+rec.SetWords(True)
+results=[]
+while True:
+    data=wf.readframes(4000)
+    if len(data)==0: break
+    if rec.AcceptWaveform(data):
+        results.append(json.loads(rec.Result()))
+results.append(json.loads(rec.FinalResult()))
+for r in results:
+    if r.get('text'): print(r['text'])
+EOF
+[75] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave, subprocess, json
+from vosk import Model, KaldiRecognizer
+w=wave.open('chal.wav'); n=w.getnframes(); sr=w.getframerate()
+d=np.frombuffer(w.readframes(n),dtype=np.int16).reshape(-1,2)
+x=d[:,0][::-1].astype(np.int16)
+out=wave.open('rev16k.wav','wb'); out.setnchannels(1); out.setsampwidth(2); out.setframerate(sr)
+out.writeframes(x.tobytes()); out.close()
+subprocess.run(['ffmpeg','-y','-loglevel','error','-i','rev16k.wav','-ar','16000','-f','wav','rev16k2.wav'])
+wf=wave.open('rev16k2.wav')
+model=Model('vosk-model-small-en-us-0.15')
+rec=KaldiRecognizer(model,16000); rec.SetWords(True)
+while True:
+    data=wf.readframes(4000)
+    if len(data)==0: break
+    if rec.AcceptWaveform(data):
+        r=json.loads(rec.Result())
+        if r.get('text'): print(r['text'], r.get('result'))
+r=json.loads(rec.FinalResult())
+print(r)
+EOF
+[76] run_command cd /home/ctfplayer/workspace && timeout 280 bash -c 'curl -sL -o model2.zip https://alphacephei.com/vosk/models/vosk-model-en-us-0.22-lgraph.zip && ls -la model2.zip && unzip -q model2.zip && ls -d vosk-model*'
+[77] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import wave, json
+from vosk import Model, KaldiRecognizer
+wf=wave.open('rev16k2.wav')
+model=Model('vosk-model-en-us-0.22-lgraph')
+rec=KaldiRecognizer(model,16000); rec.SetWords(True)
+out=[]
+while True:
+    data=wf.readframes(4000)
+    if len(data)==0: break
+    if rec.AcceptWaveform(data):
+        r=json.loads(rec.Result())
+        if r.get('text'): out.append(r)
+out.append(json.loads(rec.FinalResult()))
+for r in out:
+    print(r.get('text'), [(w['word'],round(w['start'],2),round(w['end'],2)) for w in r.get('result',[])])
+EOF
+[78] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, wave, subprocess, json
+from vosk import Model, KaldiRecognizer
+w=wave.open('chal.wav'); n=w.getnframes(); sr=w.getframerate()
+d=np.frombuffer(w.readframes(n),dtype=np.int16).reshape(-1,2)
+L=d[:,0].astype(np.int16)
+# reverse whole left channel
+rev=L[::-1]
+out=wave.open('revL.wav','wb'); out.setnchannels(1); out.setsampwidth(2); out.setframerate(sr)
+out.writeframes(rev.tobytes()); out.close()
+subprocess.run(['ffmpeg','-y','-loglevel','error','-i','revL.wav','-ar','16000','-ac','1','revL16.wav'])
+wf=wave.open('revL16.wav')
+model=Model('vosk-model-en-us-0.22-lgraph')
+rec=KaldiRecognizer(model,16000); rec.SetWords(True)
+out=[]
+while True:
+    data=wf.readframes(4000)
+    if len(data)==0: break
+    if rec.AcceptWaveform(data):
+        r=json.loads(rec.Result())
+        if r.get('text'): out.append(r)
+out.append(json.loads(rec.FinalResult()))
+for r in out:
+    print(repr(r.get('text')), [(w['word'],round(w['start'],2),round(w['end'],2)) for w in r.get('result',[])])
+EOF
+[79] run_command cd /home/ctfplayer/workspace && python3 -c "import torch; print(torch.__version__)" 2>&1 | tail -1; pip install faster-whisper 2>&1 | tail -2
+[80] run_command cd /home/ctfplayer/workspace && timeout 280 python3 - <<'EOF'
+from faster_whisper import WhisperModel
+m=WhisperModel('small.en', device='cpu', compute_type='int8')
+segs,info=m.transcribe('revL16.wav', beam_size=5, word_timestamps=True)
+for s in segs:
+    print(round(s.start,2), round(s.end,2), s.text)
+EOF
+finished: aborted reason=aborted rounds=80 cost=$0.0575 transcript=C:\Users\Dingus\csaw26_llm_ctf\logs\evals\20261109-214412__eval\09__12345678\lane-2\20261109-222752__misc_12345678_main_deepseek_deepseek-v4_1-flash-1017.json
