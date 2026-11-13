@@ -1,0 +1,982 @@
+[01] run_command ls -la /home/ctfplayer/ctf_files/ && file /home/ctfplayer/ctf_files/*
+[01] run_command cat /tools.txt 2>/dev/null | head -50
+[02] run_command cd /home/ctfplayer/workspace && ffprobe -v error -show_format -show_streams -show_chapters /home/ctfplayer/ctf_files/finderskeepers.mp4 2>&1 | head -80
+[02] run_command cd /home/ctfplayer/workspace && strings -n 6 /home/ctfplayer/ctf_files/finderskeepers.mp4 | head -60
+[03] run_command echo 'ZXNucHtkMGNfQHl6QGdsX21uMGpfcG0zejNfZzBfbzAwc30=' | base64 -d; echo
+[03] run_command cd /home/ctfplayer/workspace && ffmpeg -v error -i /home/ctfplayer/ctf_files/finderskeepers.mp4 -vf "select=eq(n\,0)" -vframes 1 frame0.png && ffmpeg -v error -i /home/ctfplayer/ctf_files/finderskeepers.mp4 -vf "select=eq(n\,150)" -vframes 1 frame150.png && ffmpeg -v error -i /home/ctfplayer/ctf_files/finderskeepers.mp4 -vf "select=eq(n\,299)" -vframes 1 frame299.png && ls -la
+[04] view_image {"path": "/home/ctfplayer/workspace/frame0.png", "question": "Describe the frame content, any text visible."}
+[04] view_image {"path": "/home/ctfplayer/workspace/frame150.png", "question": "Describe the frame content, any text visible."}
+attached 2 image(s) to the next round
+[05] run_command cd /home/ctfplayer/workspace && exiftool /home/ctfplayer/ctf_files/finderskeepers.mp4 2>&1 | head -60
+[05] run_command cd /home/ctfplayer/workspace && python3 -c "
+import struct
+data=open('/home/ctfplayer/ctf_files/finderskeepers.mp4','rb').read()
+print(len(data))
+# parse top-level atoms
+i=0
+while i < len(data)-8:
+    size=struct.unpack('>I',data[i:i+4])[0]
+    typ=data[i+4:i+8]
+    print(i, size, typ)
+    if size==0: break
+    if size==1:
+        size=struct.unpack('>Q',data[i+8:i+16])[0]
+    i+=size
+"
+[06] run_command cd /home/ctfplayer/workspace && python3 -c "
+data=open('/home/ctfplayer/ctf_files/finderskeepers.mp4','rb').read()
+u=data[4469:4469+3483]
+print(u[:16].hex())
+open('uuid_atom.bin','wb').write(u)
+" && xxd uuid_atom.bin | head -20 && echo ---- && strings -n 4 uuid_atom.bin | tail -40
+[07] run_command cd /home/ctfplayer/workspace && python3 -c "
+data=open('/home/ctfplayer/ctf_files/finderskeepers.mp4','rb').read()
+print('tail after mdat:', 7952+1669181, len(data))
+print(data[7952+1669181:][:200])
+" && echo === && ffprobe -v error -show_entries frame=pict_type -of csv /home/ctfplayer/ctf_files/finderskeepers.mp4 2>/dev/null | head -20
+[07] run_command cd /home/ctfplayer/workspace && mkdir -p frames && ffmpeg -v error -i /home/ctfplayer/ctf_files/finderskeepers.mp4 -vsync 0 frames/f%03d.png && ls frames | head -5 && ls frames | wc -l
+[08] run_command cd /home/ctfplayer/workspace && python3 -c "
+s='esnp{d0c_@yz@gl_mn0j_pm3z3_g0_o00s}'
+import string
+# Caesar
+for k in range(26):
+    out=''.join(chr((ord(c)-97+k)%26+97) if c.islower() else c for c in s)
+    print(k,out)
+"
+[08] run_command cd /home/ctfplayer/workspace && python3 -c "
+# keyboard shift
+s='esnp{d0c_@yz@gl_mn0j_pm3z3_g0_o00s}'
+rows=['1234567890-=','qwertyuiop[]','asdfghjkl;\'','zxcvbnm,./']
+def shift(s,dir):
+    out=[]
+    for c in s:
+        for r in rows:
+            if c in r:
+                i=r.index(c)+dir
+                if 0<=i<len(r): out.append(r[i])
+                else: out.append(c)
+                break
+        else: out.append(c)
+    return ''.join(out)
+print('L:',shift(s,-1))
+print('R:',shift(s,1))
+# atbash
+print('atbash:',''.join(chr(219-ord(c)) if c.islower() else c for c in s))
+"
+[09] run_command cd /home/ctfplayer/workspace && ffmpeg -v error -i /home/ctfplayer/ctf_files/finderskeepers.mp4 -vf "select='not(mod(n,30))',scale=480:270,tile=5x2" -frames:v 1 contact.png && ls -la contact.png
+[09] run_command cd /home/ctfplayer/workspace && python3 -c "
+import subprocess, numpy as np
+# extract raw frames and check for anomalies
+import os
+" && ffmpeg -v error -i /home/ctfplayer/ctf_files/finderskeepers.mp4 -f rawvideo -pix_fmt gray - 2>/dev/null | python3 -c "
+import sys, numpy as np
+data=sys.stdin.buffer.read()
+n=300
+h,w=1080,1920
+f=np.frombuffer(data,dtype=np.uint8).reshape(n,h,w)
+print(f.shape)
+# mean brightness per frame
+m=f.reshape(n,-1).mean(axis=1)
+print(np.round(m,3))
+"
+[10] view_image {"path": "/home/ctfplayer/workspace/contact.png", "question": "This is a 5x2 tile of frames 0,30,60,...270. Describe the motion of the colored rectangles and any pattern."}
+attached 1 image(s) to the next round
+[11] run_command cd /home/ctfplayer/workspace && python3 -c "
+import numpy as np, subprocess
+data=subprocess.run(['ffmpeg','-v','error','-i','/home/ctfplayer/ctf_files/finderskeepers.mp4','-f','rawvideo','-pix_fmt','gray','-'],capture_output=True).stdout
+n,h,w=300,1080,1920
+f=np.frombuffer(data,dtype=np.uint8).reshape(n,h,w)
+# find pixels brighter than 0 but darker than the rectangles (rects are pastel ~150-230)
+# background is near black. Check unique-ish values
+for i in [0,90,120,150,299]:
+    fr=f[i]
+    vals,counts=np.unique(fr,return_counts=True)
+    print(i, list(zip(vals[:10],counts[:10])), 'max',fr.max())
+"
+[11] run_command cd /home/ctfplayer/workspace && for n in 90 120 150 180 210 240 270; do ffmpeg -v error -i /home/ctfplayer/ctf_files/finderskeepers.mp4 -vf "select=eq(n\,$n),eq=contrast=8:brightness=0.05" -vframes 1 enh_$n.png -y; done; ls enh_*.png
+[12] view_image {"path": "/home/ctfplayer/workspace/enh_120.png", "question": "Any hidden text or symbols in the dark background?"}
+[12] view_image {"path": "/home/ctfplayer/workspace/enh_240.png", "question": "Any hidden text or symbols in the dark background?"}
+attached 2 image(s) to the next round
+[13] run_command cd /home/ctfplayer/workspace && python3 -c "
+import numpy as np, subprocess
+data=subprocess.run(['ffmpeg','-v','error','-i','/home/ctfplayer/ctf_files/finderskeepers.mp4','-f','rawvideo','-pix_fmt','gray','-'],capture_output=True).stdout
+n,h,w=300,1080,1920
+f=np.frombuffer(data,dtype=np.uint8).reshape(n,h,w)
+# look at region y 0-320, x 800-1300 for faint marks
+reg=f[:, 0:320, 800:1300]
+for i in range(n):
+    r=reg[i]
+    # count pixels in mid range (30..120) - faint marks
+    cnt=((r>25)&(r<150)).sum()
+    if cnt>20: print(i,cnt)
+" | head -40
+[14] run_command cd /home/ctfplayer/workspace && python3 -c "
+import numpy as np, subprocess
+from scipy import ndimage
+data=subprocess.run(['ffmpeg','-v','error','-i','/home/ctfplayer/ctf_files/finderskeepers.mp4','-f','rawvideo','-pix_fmt','rgb24','-'],capture_output=True).stdout
+n,h,w=300,1080,1920
+f=np.frombuffer(data,dtype=np.uint8).reshape(n,h,w,3)
+print('loaded',f.shape)
+# background color?
+print('corner',f[0,0,0],f[0,500,500])
+# mask non-background
+bg=f[0,0,0].astype(int)
+d=np.abs(f[0].astype(int)-bg).sum(axis=2)
+mask=d>40
+lab,nl=ndimage.label(mask)
+print('components frame0',nl)
+objs=ndimage.find_objects(lab)
+sizes=ndimage.sum(mask,lab,range(1,nl+1))
+print(sorted(sizes)[-20:])
+"
+[15] run_command cd /home/ctfplayer/workspace && python3 << 'EOF'
+import numpy as np, subprocess, json
+from scipy import ndimage
+data=subprocess.run(['ffmpeg','-v','error','-i','/home/ctfplayer/ctf_files/finderskeepers.mp4','-f','rawvideo','-pix_fmt','rgb24','-'],capture_output=True).stdout
+n,h,w=300,1080,1920
+f=np.frombuffer(data,dtype=np.uint8).reshape(n,h,w,3)
+np.save('frames_rgb.npy', f)
+bg=np.array([13,12,17])
+res=[]
+for i in range(n):
+    d=np.abs(f[i].astype(int)-bg).sum(axis=2)
+    mask=d>60
+    lab,nl=ndimage.label(mask)
+    objs=ndimage.find_objects(lab)
+    rects=[]
+    for j,sl in enumerate(objs):
+        ys,xs=sl
+        hh=ys.stop-ys.start; ww=xs.stop-xs.start
+        size=(lab[sl]==j+1).sum()
+        if size<2000: continue
+        cy=(ys.start+ys.stop)/2; cx=(xs.start+xs.stop)/2
+        # get color at center
+        col=f[i,int(cy),int(cx)]
+        rects.append((round(cx,1),round(cy,1),ww,hh,tuple(int(c) for c in col),int(size)))
+    res.append(rects)
+    if i<3: print(i, len(rects), rects[:6])
+json.dump(res, open('rects.json','w'))
+EOF
+[16] run_command cd /home/ctfplayer/workspace && python3 << 'EOF'
+import numpy as np
+f=np.load('frames_rgb.npy')
+n=300
+# Look at dark pixels (background) and their variation
+fr=f[240]
+# mask background-ish
+g=fr.astype(int).sum(axis=2)
+mask=g<100
+print('dark pixels',mask.sum())
+vals=fr[mask]
+u,c=np.unique(vals.reshape(-1,3),axis=0,return_counts=True)
+order=np.argsort(-c)
+for k in order[:20]:
+    print(u[k],c[k])
+EOF
+[17] run_command cd /home/ctfplayer/workspace && python3 << 'EOF'
+import struct
+data=open('/home/ctfplayer/ctf_files/finderskeepers.mp4','rb').read()
+def parse(start,end,depth=0):
+    i=start
+    while i < end-8:
+        size=struct.unpack('>I',data[i:i+4])[0]
+        typ=data[i+4:i+8]
+        if size==0: size=end-i
+        if size==1:
+            size=struct.unpack('>Q',data[i+8:i+16])[0]
+            hdr=16
+        else:
+            hdr=8
+        print('  '*depth, i, size, typ)
+        if typ in (b'moov',b'trak',b'mdia',b'minf',b'stbl',b'udta',b'meta',b'ilst'):
+            sub = i+hdr
+            if typ==b'meta': sub += 4
+            parse(sub, i+size, depth+1)
+        i+=size
+parse(40, 40+4429)
+EOF
+[17] run_command cd /home/ctfplayer/workspace && ffmpeg -v error -i /home/ctfplayer/ctf_files/finderskeepers.mp4 -c copy -bsf:v trace_headers -f null - 2>&1 | grep -i -E "sei|user_data" | head -20
+[18] run_command cd /home/ctfplayer/workspace && python3 << 'EOF'
+data=open('/home/ctfplayer/ctf_files/finderskeepers.mp4','rb').read()
+print(data[4372:4372+97])
+print('---hex---')
+print(data[4380:4380+89].hex())
+EOF
+[18] run_command cd /home/ctfplayer/workspace && python3 << 'EOF'
+import struct
+data=open('/home/ctfplayer/ctf_files/finderskeepers.mp4','rb').read()
+# ctts at 704 size 2384
+c=data[704:704+2384]
+ver=c[0]; flags=c[1:4]; cnt=struct.unpack('>I',c[4:8])[0]
+print('ctts ver',ver,'count',cnt)
+vals=[struct.unpack('>i',c[8+8*i:12+8*i])[0] for i in range(cnt)]
+print(vals[:20])
+print(sorted(set(vals))[:30])
+print('max',max(vals),'min',min(vals))
+# stts
+s=data[648:648+24]
+print('stts',s.hex())
+EOF
+[19] run_command cd /home/ctfplayer/workspace && python3 << 'EOF'
+import numpy as np
+f=np.load('frames_rgb.npy').astype(np.float32)
+n=300
+g=f.mean(axis=3)
+# column profile per frame (sum over x) -> 1D signal to estimate vertical shift
+prof=g.sum(axis=2)  # (n, h)
+# cross-correlate consecutive frames to find vertical shift
+from numpy.fft import rfft, irfft
+shifts=[]
+for i in range(1,n):
+    a=prof[i-1]-prof[i-1].mean()
+    b=prof[i]-prof[i].mean()
+    c=irfft(rfft(a,len(a)*2)*np.conj(rfft(b,len(b)*2)))
+    s=np.argmax(c)
+    if s>len(a): s-=2*len(a)
+    shifts.append(s)
+print(shifts[:40])
+print('unique', sorted(set(shifts)))
+EOF
+[20] run_command cd /home/ctfplayer/workspace && rm -f frames_rgb.npy && df -h /home/ctfplayer | tail -1 && ffmpeg -v error -i /home/ctfplayer/ctf_files/finderskeepers.mp4 -vf "select=eq(n\,240),eq=contrast=10:brightness=0.08" -vframes 1 -y enh2_240.png && python3 -c "
+from PIL import Image
+im=Image.open('enh2_240.png')
+print(im.size)
+im.crop((800,0,1400,400)).resize((1200,800)).save('crop240.png')
+"
+[21] view_image {"path": "/home/ctfplayer/workspace/crop240.png", "question": "Zoomed region of frame 240 enhanced. Read any faint text/symbols visible."}
+attached 1 image(s) to the next round
+[22] run_command cd /home/ctfplayer/workspace && python3 << 'EOF'
+import numpy as np, subprocess
+# Read gray frames in chunks to limit memory
+n,h,w=300,1080,1920
+acc=np.zeros((h,w),dtype=np.float32)
+cnt=np.zeros((h,w),dtype=np.float32)
+proc=subprocess.Popen(['ffmpeg','-v','error','-i','/home/ctfplayer/ctf_files/finderskeepers.mp4','-f','rawvideo','-pix_fmt','gray','-'],stdout=subprocess.PIPE)
+fsz=h*w
+for i in range(n):
+    buf=proc.stdout.read(fsz)
+    fr=np.frombuffer(buf,dtype=np.uint8).reshape(h,w).astype(np.float32)
+    # faint text: gray values between 18 and 90 (bg ~14, rects >100)
+    m=(fr>18)&(fr<95)
+    acc+=np.where(m,fr,0)
+    cnt+=m
+proc.stdout.close(); proc.wait()
+np.save('acc.npy',acc); np.save('cnt.npy',cnt)
+print('done', acc.max(), cnt.max())
+EOF
+[23] run_command cd /home/ctfplayer/workspace && python3 << 'EOF'
+import numpy as np
+from PIL import Image
+acc=np.load('acc.npy'); cnt=np.load('cnt.npy')
+# visualize count map
+c=cnt/cnt.max()
+img=(np.clip(c,0,1)*255).astype(np.uint8)
+Image.fromarray(img).save('cntmap.png')
+# also acc where count>0
+a=np.where(cnt>0, acc/np.maximum(cnt,1),0)
+Image.fromarray(np.clip(a*3,0,255).astype(np.uint8)).save('accmap.png')
+print(cnt.max(), (cnt>0).sum())
+EOF
+[24] view_image {"path": "/home/ctfplayer/workspace/cntmap.png", "question": "Do you see any text or shapes in this accumulated faint-pixel count map?"}
+[24] view_image {"path": "/home/ctfplayer/workspace/accmap.png", "question": "Do you see any text or shapes in this accumulated brightness map?"}
+attached 2 image(s) to the next round
+[25] run_command cd /home/ctfplayer/workspace && python3 << 'EOF'
+import numpy as np, subprocess
+from PIL import Image
+n,h,w=300,1080,1920
+proc=subprocess.Popen(['ffmpeg','-v','error','-i','/home/ctfplayer/ctf_files/finderskeepers.mp4','-f','rawvideo','-pix_fmt','gray','-'],stdout=subprocess.PIPE)
+fsz=h*w
+# region of interest
+y0,y1,x0,x1=0,400,700,1400
+tiles=[]
+for i in range(n):
+    buf=proc.stdout.read(fsz)
+    fr=np.frombuffer(buf,dtype=np.uint8).reshape(h,w)
+    if i%20==0:
+        reg=fr[y0:y1,x0:x1].astype(np.float32)
+        # enhance: subtract background 14, scale
+        e=np.clip((reg-14)*6,0,255).astype(np.uint8)
+        tiles.append(e)
+proc.stdout.close(); proc.wait()
+# make contact sheet
+rows=[]
+for r in range(0,len(tiles),5):
+    row=np.hstack(tiles[r:r+5])
+    rows.append(row)
+sheet=np.vstack(rows)
+Image.fromarray(sheet).save('roi_sheet.png')
+print(sheet.shape)
+EOF
+[26] view_image {"path": "/home/ctfplayer/workspace/roi_sheet.png", "question": "Contact sheet of enhanced frames 0,20,40,...280 showing region x700-1400,y0-400. Describe what the small object does over time."}
+attached 1 image(s) to the next round
+[27] run_command cd /home/ctfplayer/workspace && python3 << 'EOF'
+import numpy as np, subprocess
+from PIL import Image
+n,h,w=300,1080,1920
+proc=subprocess.Popen(['ffmpeg','-v','error','-i','/home/ctfplayer/ctf_files/finderskeepers.mp4','-f','rawvideo','-pix_fmt','gray','-'],stdout=subprocess.PIPE)
+fsz=h*w
+want={0,60,120,180,240,290}
+for i in range(n):
+    buf=proc.stdout.read(fsz)
+    if i in want:
+        fr=np.frombuffer(buf,dtype=np.uint8).reshape(h,w).astype(np.float32)
+        e=np.clip((fr-14)*10,0,255).astype(np.uint8)
+        Image.fromarray(e).save(f'enh10_{i:03d}.png')
+proc.stdout.close(); proc.wait()
+print('ok')
+EOF
+ls enh10_*.png
+[28] view_image {"path": "/home/ctfplayer/workspace/enh10_000.png", "question": "Read all faint text visible in the dark background."}
+[28] view_image {"path": "/home/ctfplayer/workspace/enh10_060.png", "question": "Read all faint text visible in the dark background."}
+attached 2 image(s) to the next round
+[29] run_command cd /home/ctfplayer/workspace && python3 << 'EOF'
+import numpy as np, subprocess
+from PIL import Image
+n,h,w=300,1080,1920
+proc=subprocess.Popen(['ffmpeg','-v','error','-i','/home/ctfplayer/ctf_files/finderskeepers.mp4','-f','rawvideo','-pix_fmt','gray','-'],stdout=subprocess.PIPE)
+fsz=h*w
+info=[]
+for i in range(n):
+    buf=proc.stdout.read(fsz)
+    fr=np.frombuffer(buf,dtype=np.uint8).reshape(h,w)
+    m=(fr>20)&(fr<100)
+    if m.sum()>30:
+        ys,xs=np.nonzero(m)
+        cx,cy=xs.mean(),ys.mean()
+        # PCA
+        X=np.stack([xs-cx,ys-cy])
+        cov=X@X.T/len(xs)
+        ev,evec=np.linalg.eigh(cov)
+        v=evec[:,-1]
+        ang=np.degrees(np.arctan2(v[1],v[0]))
+        info.append((i,int(cx),int(cy),round(ang,1),int(m.sum())))
+proc.stdout.close(); proc.wait()
+for t in info[:60]: print(t)
+print('...')
+print('total frames with faint text:',len(info))
+EOF
+[30] run_command cd /home/ctfplayer/workspace && python3 << 'EOF'
+import numpy as np, subprocess
+from PIL import Image
+n,h,w=300,1080,1920
+proc=subprocess.Popen(['ffmpeg','-v','error','-i','/home/ctfplayer/ctf_files/finderskeepers.mp4','-f','rawvideo','-pix_fmt','gray','-'],stdout=subprocess.PIPE)
+fsz=h*w
+for i in range(n):
+    buf=proc.stdout.read(fsz)
+    if i==100:
+        fr=np.frombuffer(buf,dtype=np.uint8).reshape(h,w)
+        m=(fr>20)&(fr<100)
+        Image.fromarray((m*255).astype(np.uint8)).save('mask100.png')
+        break
+proc.stdout.close(); proc.wait()
+EOF
+[31] view_image {"path": "/home/ctfplayer/workspace/mask100.png", "question": "Binary mask of faint pixels. What shapes/text do you see?"}
+attached 1 image(s) to the next round
+[32] run_command cd /home/ctfplayer/workspace && python3 << 'EOF'
+import numpy as np
+from PIL import Image
+cnt=np.load('cnt.npy')
+acc=np.load('acc.npy')
+# zoom top center
+reg=cnt[0:400, 700:1400]
+img=(np.clip(reg/reg.max(),0,1)*255).astype(np.uint8)
+Image.fromarray(img).resize((1400,800), Image.NEAREST).save('zoom_cnt.png')
+reg2=acc[0:400,700:1400]
+img2=(np.clip(reg2/reg2.max(),0,1)*255).astype(np.uint8)
+Image.fromarray(img2).resize((1400,800), Image.NEAREST).save('zoom_acc.png')
+EOF
+[33] view_image {"path": "/home/ctfplayer/workspace/zoom_cnt.png", "question": "Zoomed accumulation map of top-center region. What object/shape is visible?"}
+[33] view_image {"path": "/home/ctfplayer/workspace/zoom_acc.png", "question": "Zoomed brightness accumulation of top-center region. What object/shape is visible?"}
+[34] run_command cd /home/ctfplayer/workspace && python3 << 'EOF'
+import numpy as np, subprocess
+from scipy import ndimage
+n,h,w=300,1080,1920
+proc=subprocess.Popen(['ffmpeg','-v','error','-i','/home/ctfplayer/ctf_files/finderskeepers.mp4','-f','rawvideo','-pix_fmt','gray','-'],stdout=subprocess.PIPE)
+fsz=h*w
+acc=np.zeros((h,w),dtype=np.float32)
+cnt=np.zeros((h,w),dtype=np.float32)
+for i in range(n):
+    buf=proc.stdout.read(fsz)
+    fr=np.frombuffer(buf,dtype=np.uint8).reshape(h,w)
+    rect = fr>100
+    rectd = ndimage.binary_dilation(rect, iterations=6)
+    faint = (fr>20)&(fr<100)&(~rectd)
+    acc+=np.where(faint,fr,0)
+    cnt+=faint
+proc.stdout.close(); proc.wait()
+np.save('acc2.npy',acc); np.save('cnt2.npy',cnt)
+print('max cnt',cnt.max(),'nonzero',(cnt>0).sum())
+ys,xs=np.nonzero(cnt>0)
+print('bbox', xs.min(),xs.max(),ys.min(),ys.max())
+from PIL import Image
+img=(np.clip(cnt/cnt.max(),0,1)*255).astype(np.uint8)
+Image.fromarray(img).save('cnt2.png')
+EOF
+[35] run_command cd /home/ctfplayer/workspace && python3 << 'EOF'
+import numpy as np
+from scipy import ndimage
+cnt=np.load('cnt2.npy')
+# find clusters of faint pixels that persist (cnt>3)
+m=cnt>3
+lab,nl=ndimage.label(m, structure=np.ones((3,3)))
+print('clusters',nl)
+sizes=ndimage.sum(m,lab,range(1,nl+1))
+objs=ndimage.find_objects(lab)
+big=[(int(sizes[i]),objs[i]) for i in range(nl) if sizes[i]>50]
+big.sort(reverse=True)
+for s,o in big[:30]:
+    print(s, o[1].start,o[1].stop,o[0].start,o[0].stop)
+EOF
+[36] run_command cd /home/ctfplayer/workspace && python3 << 'EOF'
+import numpy as np
+acc=np.load('acc2.npy'); cnt=np.load('cnt2.npy')
+reg=np.where(cnt>0, acc/np.maximum(cnt,1), 0)
+# crop x 850-1200, y 0-320
+sub=reg[0:320, 850:1200]
+sub=np.clip((sub-14)*8,0,255)
+# downsample by 4 with max
+h,w=sub.shape
+h2,w2=h//4,w//4
+d=sub[:h2*4,:w2*4].reshape(h2,4,w2,4).max(axis=(1,3))
+chars=' .:-=+*#%@'
+for row in d:
+    print(''.join(chars[min(9,int(v/25.6))] for v in row))
+EOF
+[37] run_command cd /home/ctfplayer/workspace && python3 << 'EOF'
+import numpy as np, subprocess
+from scipy import ndimage
+n,h,w=300,1080,1920
+proc=subprocess.Popen(['ffmpeg','-v','error','-i','/home/ctfplayer/ctf_files/finderskeepers.mp4','-f','rawvideo','-pix_fmt','gray','-'],stdout=subprocess.PIPE)
+fsz=h*w
+frames={}
+for i in range(n):
+    buf=proc.stdout.read(fsz)
+    if i in (0,100,240):
+        frames[i]=np.frombuffer(buf,dtype=np.uint8).reshape(h,w).copy()
+proc.stdout.close(); proc.wait()
+for i,fr in frames.items():
+    rect=fr>100
+    rectd=ndimage.binary_dilation(rect,iterations=8)
+    faint=(fr>20)&(fr<100)&(~rectd)
+    ys,xs=np.nonzero(faint)
+    print('frame',i,'n',len(xs),'bbox x',xs.min(),xs.max(),'y',ys.min(),ys.max())
+    np.save(f'faint_{i}.npy',faint)
+EOF
+[38] run_command cd /home/ctfplayer/workspace && python3 << 'EOF'
+import numpy as np, subprocess
+from scipy import ndimage
+from PIL import Image
+n,h,w=300,1080,1920
+proc=subprocess.Popen(['ffmpeg','-v','error','-i','/home/ctfplayer/ctf_files/finderskeepers.mp4','-f','rawvideo','-pix_fmt','gray','-'],stdout=subprocess.PIPE)
+fsz=h*w
+union=np.zeros((h,w),bool)
+for i in range(n):
+    buf=proc.stdout.read(fsz)
+    fr=np.frombuffer(buf,dtype=np.uint8).reshape(h,w)
+    rect=fr>100
+    rectd=ndimage.binary_dilation(rect,iterations=8)
+    faint=(fr>20)&(fr<100)&(~rectd)
+    union|=faint
+proc.stdout.close(); proc.wait()
+np.save('union.npy',union)
+print('union pixels',union.sum())
+Image.fromarray((union*255).astype(np.uint8)).save('union.png')
+EOF
+[39] run_command cd /home/ctfplayer/workspace && python3 << 'EOF'
+import numpy as np
+from scipy import ndimage
+union=np.load('union.npy')
+lab,nl=ndimage.label(union, structure=np.ones((3,3)))
+objs=ndimage.find_objects(lab)
+sizes=ndimage.sum(union,lab,range(1,nl+1))
+items=sorted([(int(sizes[i]),objs[i]) for i in range(nl)],reverse=True)
+for s,o in items[:20]:
+    print(s, 'x',o[1].start,o[1].stop,'y',o[0].start,o[0].stop)
+EOF
+[40] run_command cd /home/ctfplayer/workspace && python3 << 'EOF'
+import numpy as np, subprocess
+from scipy import ndimage
+n,h,w=300,1080,1920
+proc=subprocess.Popen(['ffmpeg','-v','error','-i','/home/ctfplayer/ctf_files/finderskeepers.mp4','-f','rawvideo','-pix_fmt','gray','-'],stdout=subprocess.PIPE)
+fsz=h*w
+out=[]
+for i in range(n):
+    buf=proc.stdout.read(fsz)
+    fr=np.frombuffer(buf,dtype=np.uint8).reshape(h,w)
+    rect=fr>100
+    rectd=ndimage.binary_dilation(rect,iterations=8)
+    faint=(fr>20)&(fr<100)&(~rectd)
+    lab,nl=ndimage.label(faint, structure=np.ones((3,3)))
+    objs=ndimage.find_objects(lab)
+    cents=[]
+    for j,o in enumerate(objs):
+        size=(lab[o]==j+1).sum()
+        if size<15: continue
+        cy=(o[0].start+o[0].stop)/2; cx=(o[1].start+o[1].stop)/2
+        cents.append((round(cx),round(cy),int(size)))
+    out.append(cents)
+proc.stdout.close(); proc.wait()
+import json
+json.dump(out,open('glyphs.json','w'))
+for i in range(0,300,10):
+    print(i, out[i])
+EOF
+peer findings: 1 new
+[41] run_command cd /home/ctfplayer/workspace && python3 << 'EOF'
+import numpy as np, subprocess
+from scipy import ndimage
+n,h,w=300,1080,1920
+proc=subprocess.Popen(['ffmpeg','-v','error','-i','/home/ctfplayer/ctf_files/finderskeepers.mp4','-f','rawvideo','-pix_fmt','gray','-'],stdout=subprocess.PIPE)
+fsz=h*w
+for i in range(n):
+    buf=proc.stdout.read(fsz)
+    if i in (204,):
+        fr=np.frombuffer(buf,dtype=np.uint8).reshape(h,w)
+        np.save(f'raw_{i}.npy',fr)
+        break
+proc.stdout.close(); proc.wait()
+fr=np.load('raw_204.npy')
+rect=fr>100
+rectd=ndimage.binary_dilation(rect,iterations=8)
+faint=(fr>20)&(fr<100)&(~rectd)
+# region
+y0,y1,x0,x1=0,330,850,1250
+sub=faint[y0:y1,x0:x1]
+# print with 2x downsample max
+h2,w2=sub.shape[0]//2, sub.shape[1]//2
+d=sub[:h2*2,:w2*2].reshape(h2,2,w2,2).max(axis=(1,3))
+for row in d:
+    print(''.join('#' if v else '.' for v in row))
+EOF
+[43] run_command cd /home/ctfplayer/workspace && python3 << 'EOF'
+import numpy as np, subprocess
+from scipy import ndimage
+from PIL import Image
+n,h,w=300,1080,1920
+proc=subprocess.Popen(['ffmpeg','-v','error','-i','/home/ctfplayer/ctf_files/finderskeepers.mp4','-f','rawvideo','-pix_fmt','gray','-'],stdout=subprocess.PIPE)
+fsz=h*w
+want={200,204,220,240,260,280}
+for i in range(n):
+    buf=proc.stdout.read(fsz)
+    if i in want:
+        fr=np.frombuffer(buf,dtype=np.uint8).reshape(h,w).copy()
+        rect=fr>100
+        rectd=ndimage.binary_dilation(rect,iterations=8)
+        faint=np.where((fr>20)&(fr<100)&(~rectd), 255, 0).astype(np.uint8)
+        Image.fromarray(faint).save(f'faint_{i:03d}.png')
+proc.stdout.close(); proc.wait()
+# tight crop of the glyph area for frame 240
+im=Image.open('faint_240.png')
+im.crop((850,0,1300,320)).resize((1800,1280), Image.NEAREST).save('glyph240_big.png')
+im2=Image.open('faint_204.png')
+im2.crop((850,0,1300,320)).resize((1800,1280), Image.NEAREST).save('glyph204_big.png')
+print('done')
+EOF
+[44] view_image {"path": "/home/ctfplayer/workspace/glyph240_big.png", "question": "Binary mask of faint text, zoomed 4x. Read the characters."}
+[45] run_command which tesseract; python3 -c "import pytesseract" 2>&1 | head -2; pip list 2>/dev/null | grep -i -E "tesseract|easyocr|paddle" 
+[45] run_command cd /home/ctfplayer/workspace && python3 << 'EOF'
+# Track blob trajectories across frames 190-300 using nearest neighbor
+import json, numpy as np
+out=json.load(open('glyphs.json'))
+# collect blobs per frame with size>20
+tracks=[]
+active=[]  # list of (last_frame, x, y, track_id)
+tid=0
+for i in range(190,300):
+    blobs=[(x,y,s) for (x,y,s) in out[i] if s>20]
+    used=set()
+    for (x,y,s) in blobs:
+        best=None;bd=1e9
+        for k,(lf,lx,ly,ti) in enumerate(active):
+            if lf<i-3: continue
+            d=((x-lx)**2+(y-ly)**2)**.5
+            if d<bd and d<15 and k not in used:
+                bd=d;best=k
+        if best is not None:
+            used.add(best)
+            lf,lx,ly,ti=active[best]
+            active[best]=(i,x,y,ti)
+            tracks.append((ti,i,x,y))
+        else:
+            active.append((i,x,y,tid))
+            tracks.append((tid,i,x,y))
+            tid+=1
+# print long tracks
+from collections import defaultdict
+tr=defaultdict(list)
+for ti,i,x,y in tracks: tr[ti].append((i,x,y))
+for ti,pts in sorted(tr.items(), key=lambda kv:-len(kv[1])):
+    if len(pts)>=8:
+        print('track',ti,'len',len(pts),pts[:3],'...',pts[-3:])
+EOF
+peer findings: 1 new
+[46] run_command cd /home/ctfplayer/workspace && python3 << 'EOF'
+import numpy as np, subprocess
+from PIL import Image
+n,h,w=300,1080,1920
+# load all frames as uint8 (300*1080*1920 = 622MB) - use memmap
+mm=np.lib.format.open_memmap('gray300.npy', mode='w+', dtype=np.uint8, shape=(n,h,w))
+proc=subprocess.Popen(['ffmpeg','-v','error','-i','/home/ctfplayer/ctf_files/finderskeepers.mp4','-f','rawvideo','-pix_fmt','gray','-'],stdout=subprocess.PIPE)
+fsz=h*w
+for i in range(n):
+    buf=proc.stdout.read(fsz)
+    mm[i]=np.frombuffer(buf,dtype=np.uint8).reshape(h,w)
+proc.stdout.close(); proc.wait()
+mm.flush()
+print('saved')
+# temporal median
+med=np.median(np.asarray(mm[::3]),axis=0).astype(np.uint8)
+np.save('median.npy',med)
+Image.fromarray(med).save('median.png')
+print('median done')
+EOF
+[47] run_command cd /home/ctfplayer/workspace && python3 << 'EOF'
+import numpy as np
+from PIL import Image
+mm=np.load('gray300.npy', mmap_mode='r')
+med=np.load('median.npy').astype(np.int16)
+# difference frame 240 vs median
+for i in (204,240):
+    d=mm[i].astype(np.int16)-med
+    # moving overlay: brighter than median
+    m=d>15
+    print(i,'diff pixels',m.sum())
+    Image.fromarray((np.clip(d*6,0,255)).astype(np.uint8)).save(f'diff_{i}.png')
+    Image.fromarray((m*255).astype(np.uint8)).save(f'diffmask_{i}.png')
+EOF
+[48] run_command cd /home/ctfplayer/workspace && python3 << 'EOF'
+import numpy as np
+from scipy import ndimage
+from PIL import Image
+mm=np.load('gray300.npy', mmap_mode='r')
+med=np.load('median.npy').astype(np.int16)
+d=mm[240].astype(np.int16)-med
+m=(d>15)
+# The rectangles move; restrict to pixels where frame is dark (not rect) and diff positive
+fr=mm[240]
+m2=m&(fr<100)
+print('m2',m2.sum())
+lab,nl=ndimage.label(m2,structure=np.ones((3,3)))
+objs=ndimage.find_objects(lab)
+sizes=ndimage.sum(m2,lab,range(1,nl+1))
+items=sorted([(int(sizes[i]),objs[i]) for i in range(nl)],reverse=True)
+for s,o in items[:25]:
+    print(s,'x',o[1].start,o[1].stop,'y',o[0].start,o[0].stop)
+EOF
+[49] run_command cd /home/ctfplayer/workspace && python3 << 'EOF'
+import numpy as np
+from PIL import Image
+mm=np.load('gray300.npy', mmap_mode='r')
+med=np.load('median.npy').astype(np.int16)
+for i in [204,210,220,230,240,250,260,270,280,290]:
+    d=mm[i].astype(np.int16)-med
+    fr=mm[i]
+    m=(d>12)&(fr<110)
+    img=(m*255).astype(np.uint8)
+    Image.fromarray(img).save(f'mv_{i:03d}.png')
+print('ok')
+EOF
+for f in mv_204 mv_240 mv_280; do echo "== $f"; tesseract /home/ctfplayer/workspace/$f.png - --psm 11 2>/dev/null; done
+[50] run_command cd /home/ctfplayer/workspace && python3 << 'EOF'
+import numpy as np
+from PIL import Image
+mm=np.load('gray300.npy', mmap_mode='r')
+med=np.load('median.npy').astype(np.int16)
+# Combine several frames' moving glyphs into one composite, aligned by their top-left
+# Region of interest: x 850-1250, y 0-330
+for i in [204,215,230,245,260,275,290]:
+    d=mm[i].astype(np.int16)-med
+    m=((d>10)&(mm[i]<110)).astype(np.uint8)*255
+    Image.fromarray(m).save(f'mv2_{i:03d}.png')
+# stack the ROI vertically for one image
+tiles=[]
+for i in [204,215,230,245,260,275,290]:
+    m=np.array(Image.open(f'mv2_{i:03d}.png'))[0:340,840:1260]
+    tiles.append(m)
+    tiles.append(np.full((6,420),128,np.uint8))
+sheet=np.vstack(tiles)
+Image.fromarray(sheet).resize((420*3, sheet.shape[0]*3), Image.NEAREST).save('sheet_mv.png')
+print(sheet.shape)
+EOF
+[51] view_image {"path": "/home/ctfplayer/workspace/sheet_mv.png", "question": "Seven stacked binary masks (frames 204,215,230,245,260,275,290) of moving faint glyphs in region x840-1260,y0-340, scaled 3x. Read the characters in each strip."}
+[52] run_command cd /home/ctfplayer/workspace && python3 << 'EOF'
+import numpy as np
+from scipy import ndimage
+mm=np.load('gray300.npy', mmap_mode='r')
+med=np.load('median.npy').astype(np.int16)
+# build masks for frames 190..299
+masks=[]
+for i in range(190,300):
+    d=mm[i].astype(np.int16)-med
+    m=((d>10)&(mm[i]<110))
+    masks.append(m)
+# cross-correlate consecutive masks to find shift
+def shift_est(a,b):
+    # search small range
+    best=None;bv=-1
+    for dy in range(-6,7):
+        for dx in range(-6,7):
+            bb=np.roll(np.roll(b,dy,axis=0),dx,axis=1)
+            v=(a&bb).sum()
+            if v>bv: bv=v;best=(dx,dy)
+    return best,bv
+sh=[]
+for k in range(len(masks)-1):
+    s,v=shift_est(masks[k],masks[k+1])
+    sh.append(s)
+import collections
+print(collections.Counter(sh).most_common(10))
+EOF
+[53] run_command cd /home/ctfplayer/workspace && python3 << 'EOF'
+import numpy as np
+from scipy import ndimage
+mm=np.load('gray300.npy', mmap_mode='r')
+med=np.load('median.npy').astype(np.int16)
+H,W=1080,1920
+# canvas wider
+CW=W+400
+acc=np.zeros((H,CW),np.float32)
+cnt=np.zeros((H,CW),np.float32)
+xoff=0
+prev=None
+shifts=[]
+for i in range(190,300):
+    d=mm[i].astype(np.int16)-med
+    m=((d>10)&(mm[i]<110))
+    if i>190:
+        # estimate shift vs prev
+        best=None;bv=-1
+        for dy in range(-4,5):
+            for dx in range(-4,5):
+                bb=np.roll(np.roll(m,dy,axis=0),dx,axis=1)
+                v=(prev&bb).sum()
+                if v>bv: bv=v;best=(dx,dy)
+        shifts.append(best)
+        xoff+= best[0]; yoff=best[1]
+    else:
+        xoff=200; yoff=0
+    ys,xs=np.nonzero(m)
+    if len(xs)==0: 
+        prev=m; continue
+    xs2=xs+xoff
+    ok=(xs2>=0)&(xs2<CW)
+    acc[ys[ok],xs2[ok]]+=mm[i][ys[ok],xs[ok]]
+    cnt[ys[ok],xs2[ok]]+=1
+    prev=m
+print('shift sum', sum(s[0] for s in shifts), 'yrange', min(s[1] for s in shifts), max(s[1] for s in shifts))
+img=np.where(cnt>0, np.clip((acc/np.maximum(cnt,1)-14)*8,0,255),0).astype(np.uint8)
+np.save('pano.npy',img)
+from PIL import Image
+Image.fromarray(img).save('pano.png')
+# ASCII render at 3x downsample of whole
+h2,w2=H//3,CW//3
+d=img[:h2*3,:w2*3].reshape(h2,3,w2,3).max(axis=(1,3))
+chars=' .:-=+*#%@'
+for row in d[::1]:
+    print(''.join(chars[min(9,int(v/25.6))] for v in row))
+EOF
+[54] run_command cd /home/ctfplayer/workspace && python3 << 'EOF'
+import numpy as np
+from scipy import ndimage
+mm=np.load('gray300.npy', mmap_mode='r')
+med=np.load('median.npy').astype(np.int16)
+H,W=1080,1920
+CW=W+600
+acc=np.zeros((H,CW),np.float32)
+cnt=np.zeros((H,CW),np.float32)
+xoff=300
+prev=None
+for i in range(190,300):
+    d=mm[i].astype(np.int16)-med
+    m=((d>10)&(mm[i]<110))
+    if i>190:
+        best=None;bv=-1
+        for dy in range(-4,5):
+            for dx in range(-4,5):
+                bb=np.roll(np.roll(m,dy,axis=0),dx,axis=1)
+                v=(prev&bb).sum()
+                if v>bv: bv=v;best=(dx,dy)
+        xoff+=best[0]
+    prev=m
+    lab,nl=ndimage.label(m,structure=np.ones((3,3)))
+    objs=ndimage.find_objects(lab)
+    sizes=ndimage.sum(m,lab,range(1,nl+1))
+    for j,o in enumerate(objs):
+        s=sizes[j]
+        if s<15 or s>400: continue   # small glyph blobs only
+        hh=o[0].stop-o[0].start; ww=o[1].stop-o[1].start
+        if hh>60 or ww>60: continue
+        sub=(lab[o]==j+1)
+        ys=o[0].start+np.nonzero(sub)[0]
+        xs=o[1].start+np.nonzero(sub)[1]
+        xs2=xs+xoff
+        ok=(xs2>=0)&(xs2<CW)
+        acc[ys[ok],xs2[ok]]+=mm[i][ys[ok],xs[ok]]
+        cnt[ys[ok],xs2[ok]]+=1
+img=np.where(cnt>0, np.clip((acc/np.maximum(cnt,1)-14)*10,0,255),0).astype(np.uint8)
+np.save('pano2.npy',img)
+from PIL import Image
+Image.fromarray(img).save('pano2.png')
+print('saved', img.shape)
+EOF
+[55] run_command cd /home/ctfplayer/workspace && python3 << 'EOF'
+import numpy as np
+img=np.load('pano2.npy')
+# find rows/cols with content
+m=img>0
+rows=np.nonzero(m.any(axis=1))[0]
+cols=np.nonzero(m.any(axis=0))[0]
+print('rows',rows.min(),rows.max(),'cols',cols.min(),cols.max())
+# ASCII of the glyph band, 2x downsample
+y0,y1=rows.min()-5,rows.max()+5
+x0,x1=cols.min()-5,cols.max()+5
+sub=img[y0:y1,x0:x1]
+h2,w2=sub.shape[0]//2,sub.shape[1]//2
+d=sub[:h2*2,:w2*2].reshape(h2,2,w2,2).max(axis=(1,3))
+chars=' .:-=+*#%@'
+for row in d:
+    print(''.join(chars[min(9,int(v/25.6))] for v in row))
+EOF
+[56] run_command cd /home/ctfplayer/workspace && python3 << 'EOF'
+import numpy as np
+from scipy import ndimage
+mm=np.load('gray300.npy', mmap_mode='r')
+med=np.load('median.npy').astype(np.int16)
+i=240
+d=mm[i].astype(np.int16)-med
+m=((d>8)&(mm[i]<110))
+lab,nl=ndimage.label(m,structure=np.ones((3,3)))
+objs=ndimage.find_objects(lab)
+sizes=ndimage.sum(m,lab,range(1,nl+1))
+blobs=[]
+for j,o in enumerate(objs):
+    s=sizes[j]
+    if s<20 or s>500: continue
+    hh=o[0].stop-o[0].start; ww=o[1].stop-o[1].start
+    if hh>70 or ww>70: continue
+    blobs.append((o[1].start,o[0].start,o[1].stop,o[0].stop,j+1))
+blobs.sort()
+for (x0,y0,x1,y1,l) in blobs:
+    print(f'--- blob at x{x0}-{x1} y{y0}-{y1} size {int(sizes[l-1])}')
+    sub=(lab[y0-2:y1+2,x0-2:x1+2]==l)
+    for row in sub:
+        print(''.join('#' if v else '.' for v in row))
+EOF
+[57] run_command cd /home/ctfplayer/workspace && python3 << 'EOF'
+import numpy as np
+from scipy import ndimage
+mm=np.load('gray300.npy', mmap_mode='r')
+med=np.load('median.npy').astype(np.int16)
+i=240
+d=mm[i].astype(np.int16)-med
+m=((d>8)&(mm[i]<110))
+# remove big blobs (rect edges): keep only small components
+lab,nl=ndimage.label(m,structure=np.ones((3,3)))
+sizes=ndimage.sum(m,lab,range(1,nl+1))
+keep=np.zeros_like(m)
+for j in range(nl):
+    if 20<=sizes[j]<=400:
+        o=ndimage.find_objects(lab==j+1)[0]
+        hh=o[0].stop-o[0].start; ww=o[1].stop-o[1].start
+        if hh<=70 and ww<=70:
+            keep|=(lab==j+1)
+print('kept',keep.sum())
+# try rotations, measure row-profile sharpness
+best=None
+for ang in np.arange(20,70,2):
+    r=ndimage.rotate(keep.astype(np.uint8)*255, -ang, reshape=True, order=1)
+    prof=(r>100).sum(axis=1).astype(float)
+    if prof.max()==0: continue
+    sharp=(prof**2).sum()/ (prof.sum()**2+1e-9) * len(prof)
+    if best is None or sharp>best[0]: best=(sharp,ang)
+    print(ang, round(sharp,4))
+print('best', best)
+EOF
+[58] run_command cd /home/ctfplayer/workspace && python3 << 'EOF'
+import numpy as np
+from scipy import ndimage
+from PIL import Image
+mm=np.load('gray300.npy', mmap_mode='r')
+med=np.load('median.npy').astype(np.int16)
+i=240
+d=mm[i].astype(np.int16)-med
+m=((d>8)&(mm[i]<110))
+lab,nl=ndimage.label(m,structure=np.ones((3,3)))
+sizes=ndimage.sum(m,lab,range(1,nl+1))
+keep=np.zeros_like(m)
+for j in range(nl):
+    if 20<=sizes[j]<=400:
+        o=ndimage.find_objects(lab==j+1)[0]
+        hh=o[0].stop-o[0].start; ww=o[1].stop-o[1].start
+        if hh<=70 and ww<=70:
+            keep|=(lab==j+1)
+rot=ndimage.rotate(keep.astype(np.uint8)*255, -58, reshape=True, order=1)
+m2=rot>100
+ys,xs=np.nonzero(m2)
+print('bbox',xs.min(),xs.max(),ys.min(),ys.max())
+sub=m2[ys.min()-3:ys.max()+4, xs.min()-3:xs.max()+4]
+print(sub.shape)
+# ASCII 1x
+for row in sub:
+    print(''.join('#' if v else '.' for v in row))
+EOF
+[59] run_command cd /home/ctfplayer/workspace && python3 << 'EOF' 2>&1 | head -200
+import numpy as np
+union=np.load('union.npy')
+sub=union[0:330, 850:1250]
+# 2x downsample
+h2,w2=sub.shape[0]//2,sub.shape[1]//2
+d=sub[:h2*2,:w2*2].reshape(h2,2,w2,2).max(axis=(1,3))
+for row in d:
+    print(''.join('#' if v else '.' for v in row))
+EOF
+[60] run_command cd /home/ctfplayer/workspace && python3 << 'EOF'
+import numpy as np
+from scipy import ndimage
+from scipy.signal import fftconvolve
+mm=np.load('gray300.npy', mmap_mode='r')
+med=np.load('median.npy').astype(np.int16)
+H,W=1080,1920
+masks={}
+for i in range(185,300):
+    d=mm[i].astype(np.int16)-med
+    m=((d>8)&(mm[i]<110))
+    lab,nl=ndimage.label(m,structure=np.ones((3,3)))
+    if nl==0: masks[i]=np.zeros((H,W),bool); continue
+    sizes=ndimage.sum(m,lab,range(1,nl+1))
+    keep=np.zeros((H,W),bool)
+    for j in range(nl):
+        if 15<=sizes[j]<=500:
+            o=ndimage.find_objects(lab==j+1)[0]
+            hh=o[0].stop-o[0].start; ww=o[1].stop-o[1].start
+            if hh<=75 and ww<=75:
+                keep|=(lab==j+1)
+    masks[i]=keep
+    if i%20==0: print(i, keep.sum())
+np.save('masks.npy', np.array([masks[i] for i in range(185,300)]))
+print('done')
+EOF
+[61] run_command cd /home/ctfplayer/workspace && python3 << 'EOF'
+import numpy as np
+from scipy import ndimage
+M=np.load('masks.npy')  # indices 0..114 => frames 185..299
+n=M.shape[0]
+# estimate shifts between consecutive frames over a coarse grid
+shifts=[]
+for k in range(n-1):
+    a=M[k]; b=M[k+1]
+    if a.sum()<50 or b.sum()<50: shifts.append((0,0)); continue
+    best=None;bv=-1
+    for dy in range(-8,9):
+        for dx in range(-8,9):
+            bb=np.roll(np.roll(b,dy,axis=0),dx,axis=1)
+            v=(a&bb).sum()
+            if v>bv: bv=v;best=(dx,dy)
+    shifts.append(best)
+shifts=np.array(shifts)
+print('dx histogram', np.bincount(shifts[:,0]+8))
+print('dy histogram', np.bincount(shifts[:,1]+8))
+print('cumulative dx', shifts[:,0].sum(), 'dy', shifts[:,1].sum())
+np.save('shifts.npy',shifts)
+EOF
+finished: aborted reason=aborted rounds=61 cost=$0.0688 transcript=C:\Users\Dingus\csaw26_llm_ctf\logs\races\20261113-101136__finders keepers\lane-3\20261113-102121__crypto_finders_keepers_main_deepseek_deepseek-v4_1-flash.json

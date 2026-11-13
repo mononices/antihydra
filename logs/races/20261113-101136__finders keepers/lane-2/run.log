@@ -1,0 +1,552 @@
+[01] run_command cd /home/ctfplayer/ctf_files && ls -la && file finderskeepers.mp4 && ffprobe -v error -show_format -show_streams finderskeepers.mp4 2>&1 | head -80
+[02] run_command cd /home/ctfplayer/workspace && mkdir -p frames && ffmpeg -v error -i ../ctf_files/finderskeepers.mp4 -vf "fps=2" frames/f_%03d.png && ls frames | head && ls frames | wc -l
+[03] view_image {"path": "/home/ctfplayer/workspace/frames/f_001.png", "question": "Describe this frame; is there text or a code?"}
+[03] view_image {"path": "/home/ctfplayer/workspace/frames/f_010.png", "question": "Describe this frame; is there text or a code?"}
+attached 2 image(s) to the next round
+[04] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import struct
+f=open('../ctf_files/finderskeepers.mp4','rb').read()
+print(len(f))
+def walk(data, off, end, depth=0):
+    while off < end-8:
+        size, typ = struct.unpack('>I4s', data[off:off+8])
+        typ=typ.decode('latin1')
+        hdr=8
+        if size==1:
+            size=struct.unpack('>Q',data[off+8:off+16])[0]; hdr=16
+        elif size==0:
+            size=end-off
+        print('  '*depth, typ, size, 'at', off)
+        if typ in ('moov','trak','mdia','minf','stbl','edts','dinf','udta','ilst','mvex','moof','traf'):
+            walk(data, off+hdr, off+size, depth+1)
+        off+=size
+walk(f,0,len(f))
+EOF
+[05] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+f=open('../ctf_files/finderskeepers.mp4','rb').read()
+b=f[4469:4469+3483]
+print(b[:64].hex())
+print(b[:64])
+open('uuid.bin','wb').write(b)
+print(len(b))
+EOF
+xxd uuid.bin | head -40
+[06] run_command cd /home/ctfplayer/workspace && strings -n 4 uuid.bin | head -100
+[07] run_command cd /home/ctfplayer/workspace && echo 'ZXNucHtkMGNfQHl6QGdsX21uMGpfcG0zejNfZzBfbzAwc30=' | base64 -d; echo
+[08] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+f=open('../ctf_files/finderskeepers.mp4','rb').read()
+print(f[4380:4469])
+print(f[4380:4469].hex())
+EOF
+[09] run_command cd /home/ctfplayer/workspace && strings -n 6 ../ctf_files/finderskeepers.mp4 | grep -viE '^(.)\1*$' | head -60; echo ---; python3 - <<'EOF'
+f=open('../ctf_files/finderskeepers.mp4','rb').read()
+import re
+# find base64-like long strings
+for m in re.finditer(rb'[A-Za-z0-9+/=]{16,}', f):
+    print(m.start(), m.group()[:200])
+EOF
+[10] run_command cd /home/ctfplayer/workspace && ffmpeg -v error -i ../ctf_files/finderskeepers.mp4 -vf "fps=2,scale=480:-1,tile=5x4" -frames:v 1 montage.png && ls -la montage.png
+[11] view_image {"path": "/home/ctfplayer/workspace/montage.png", "question": "Look at this 5x4 tile of video frames. Any text, symbols, QR, or pattern across frames?"}
+attached 1 image(s) to the next round
+[13] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import subprocess, numpy as np
+# extract all 300 frames at low res to analyze
+subprocess.run(['ffmpeg','-v','error','-i','../ctf_files/finderskeepers.mp4','-vf','scale=480:270','-pix_fmt','rgb24','-f','rawvideo','raw.rgb'],check=True)
+d=np.fromfile('raw.rgb',dtype=np.uint8)
+n=d.size//(480*270*3)
+d=d.reshape(n,270,480,3).astype(np.int16)
+print(n)
+m=d.mean(axis=(1,2,3))
+print(np.round(m,2))
+EOF
+[14] run_command cd /home/ctfplayer/workspace && binwalk ../ctf_files/finderskeepers.mp4 2>/dev/null | head -30; echo ---; python3 - <<'EOF'
+import struct
+f=open('../ctf_files/finderskeepers.mp4','rb').read()
+def box(off):
+    size,typ=struct.unpack('>I4s',f[off:off+8]); return size,typ.decode('latin1')
+# stco at 4348
+o=4348
+print(f[o:o+24].hex())
+size,typ=box(o)
+ver=f[o+8:o+12].hex(); n=struct.unpack('>I',f[o+12:o+16])[0]
+print('stco entries',n)
+offs=struct.unpack('>%dI'%n, f[o+16:o+16+4*n])
+print(offs)
+# stsz at 3128
+o=3128
+n=struct.unpack('>I',f[o+16:o+20])[0]
+print('stsz count',n, 'default',struct.unpack('>I',f[o+12:o+16])[0])
+sizes=struct.unpack('>%dI'%n, f[o+20:o+20+4*n])
+print(sizes[:10], sum(sizes))
+EOF
+[15] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import struct
+f=open('../ctf_files/finderskeepers.mp4','rb').read()
+o=3128
+n=struct.unpack('>I',f[o+16:o+20])[0]
+sizes=struct.unpack('>%dI'%n, f[o+20:o+20+4*n])
+print('total',sum(sizes))
+print('mdat payload', 1669181-8)
+print('diff', 1669181-8-sum(sizes))
+# find chunk boundary
+s=0
+for i,x in enumerate(sizes):
+    s+=x
+    if s==1046811: print('chunk1 ends at index',i, 'cum',s)
+print('cum check', s)
+# check last bytes
+print(f[-64:].hex())
+EOF
+[16] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import struct
+f=open('../ctf_files/finderskeepers.mp4','rb').read()
+# parse avcC from stsd
+o=449
+size,typ=struct.unpack('>I4s',f[o:o+8])
+print(typ,size)
+print(f[o+8:o+size].hex())
+EOF
+[17] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import struct
+f=open('../ctf_files/finderskeepers.mp4','rb').read()
+o=3128
+n=struct.unpack('>I',f[o+16:o+20])[0]
+sizes=struct.unpack('>%dI'%n, f[o+20:o+20+4*n])
+start=7960
+from collections import Counter
+c=Counter()
+nals=Counter()
+for i,sz in enumerate(sizes):
+    p=start
+    end=p+sz
+    while p<end:
+        l=struct.unpack('>I',f[p:p+4])[0]
+        t=f[p+4]&0x1f
+        c[t]+=1
+        if t in (6,7,8,9,5,1) and i<3:
+            nals[(i,t,l)]=f[p+4:p+4+min(l,80)]
+        p+=4+l
+    start=end
+print(c)
+for k,v in nals.items(): print(k, v[:60].hex())
+EOF
+[18] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import struct
+f=open('../ctf_files/finderskeepers.mp4','rb').read()
+o=3128
+n=struct.unpack('>I',f[o+16:o+20])[0]
+sizes=struct.unpack('>%dI'%n, f[o+20:o+20+4*n])
+start=7960
+for i,sz in enumerate(sizes):
+    p=start; end=p+sz
+    while p<end:
+        l=struct.unpack('>I',f[p:p+4])[0]
+        t=f[p+4]&0x1f
+        if t==6:
+            print('frame',i,'len',l)
+            print(f[p+4:p+4+l])
+        p+=4+l
+    start=end
+EOF
+[19] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, subprocess
+subprocess.run(['ffmpeg','-v','error','-i','../ctf_files/finderskeepers.mp4','-vf','select=eq(n\\,0)','-frames:v','1','-pix_fmt','rgb24','-f','rawvideo','f0.rgb'],check=True)
+d=np.fromfile('f0.rgb',dtype=np.uint8).reshape(1080,1920,3)
+cols,counts=np.unique(d.reshape(-1,3),axis=0,return_counts=True)
+idx=np.argsort(-counts)
+for i in idx[:40]:
+    print(cols[i], counts[i])
+print('total unique',len(cols))
+EOF
+[20] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np
+from scipy import ndimage
+d=np.fromfile('f0.rgb',dtype=np.uint8).reshape(1080,1920,3).astype(int)
+bg=np.array([13,12,17])
+mask=(np.abs(d-bg).sum(axis=2)>40)
+lab,n=ndimage.label(mask)
+print('components',n)
+objs=ndimage.find_objects(lab)
+for i,sl in enumerate(objs):
+    ys,xs=sl
+    h=ys.stop-ys.start; w=xs.stop-xs.start
+    m=lab[sl]==i+1
+    px=d[sl][m]
+    med=np.median(px,axis=0)
+    print(i+1, 'x',xs.start,xs.stop,'y',ys.start,ys.stop,'w',w,'h',h,'area',m.sum(),'color',med)
+EOF
+[21] run_command cd /home/ctfplayer/workspace && cat > detect.py <<'EOF'
+import numpy as np, subprocess, json, sys
+from scipy import ndimage
+W,H=1920,1080
+p=subprocess.Popen(['ffmpeg','-v','error','-i','../ctf_files/finderskeepers.mp4','-pix_fmt','rgb24','-f','rawvideo','-'],stdout=subprocess.PIPE)
+frames=[]
+i=0
+while True:
+    buf=p.stdout.read(W*H*3)
+    if len(buf)<W*H*3: break
+    d=np.frombuffer(buf,dtype=np.uint8).reshape(H,W,3).astype(np.int16)
+    bg=np.array([13,12,17])
+    mask=(np.abs(d-bg).sum(axis=2)>40)
+    lab,n=ndimage.label(mask)
+    objs=ndimage.find_objects(lab)
+    out=[]
+    for j,sl in enumerate(objs):
+        ys,xs=sl
+        m=lab[sl]==j+1
+        a=m.sum()
+        if a<500: continue
+        px=d[sl][m]
+        med=tuple(int(v) for v in np.median(px,axis=0))
+        out.append(dict(x=int(xs.start),y=int(ys.start),w=int(xs.stop-xs.start),h=int(ys.stop-ys.start),area=int(a),c=med))
+    frames.append(out)
+    i+=1
+    if i%50==0: print(i,file=sys.stderr)
+json.dump(frames,open('rects.json','w'))
+print('frames',len(frames))
+EOF
+python3 detect.py
+[22] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import json
+fr=json.load(open('rects.json'))
+for i in [0,1,2,3]:
+    print('frame',i,len(fr[i]))
+    for r in fr[i]: print('  ',r)
+EOF
+[23] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np
+d=np.fromfile('raw.rgb',dtype=np.uint8).reshape(-1,270,480,3).astype(np.float32)
+std=d.std(axis=0).mean(axis=2)
+mn=d.min(axis=0).mean(axis=2)
+mx=d.max(axis=0).mean(axis=2)
+for name,a in [('std',std),('min',mn),('max',mx)]:
+    a=a-a.min(); a=(a/a.max()*255).astype(np.uint8)
+    from PIL import Image
+    Image.fromarray(a).save(f'temp_{name}.png')
+print('ok')
+EOF
+ls temp_*.png
+[24] view_image {"path": "/home/ctfplayer/workspace/temp_std.png", "question": "Does this temporal standard deviation image reveal shapes or text?"}
+[24] view_image {"path": "/home/ctfplayer/workspace/temp_max.png", "question": "Does this temporal max image reveal shapes or text?"}
+attached 2 image(s) to the next round
+[25] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np
+from PIL import Image
+d=np.fromfile('f0.rgb',dtype=np.uint8).reshape(1080,1920,3)
+Image.fromarray(d[0:300,800:1200]).resize((1200,900),Image.NEAREST).save('crop_top.png')
+EOF
+ls crop_top.png
+[26] view_image {"path": "/home/ctfplayer/workspace/crop_top.png", "question": "Zoomed crop near top center of frame 0. Is there a small logo or text?"}
+attached 1 image(s) to the next round
+[27] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, subprocess
+from PIL import Image
+W,H=1920,1080
+p=subprocess.Popen(['ffmpeg','-v','error','-i','../ctf_files/finderskeepers.mp4','-pix_fmt','rgb24','-f','rawvideo','-'],stdout=subprocess.PIPE)
+acc=None; acc2=None; n=0
+while True:
+    buf=p.stdout.read(W*H*3)
+    if len(buf)<W*H*3: break
+    d=np.frombuffer(buf,dtype=np.uint8).reshape(H,W,3).astype(np.float32)
+    if acc is None:
+        acc=d.copy(); acc2=(d*d); 
+    else:
+        acc+=d; acc2+=d*d
+    n+=1
+mean=acc/n
+var=acc2/n-mean*mean
+std=np.sqrt(np.clip(var,0,None)).mean(axis=2)
+np.save('std_full.npy',std)
+a=(std/std.max()*255).astype(np.uint8)
+Image.fromarray(a).save('std_full.png')
+Image.fromarray(a[0:300,700:1300]).resize((1800,900),Image.LANCZOS).save('std_crop.png')
+print(n, std.max())
+EOF
+[28] view_image {"path": "/home/ctfplayer/workspace/std_full.png", "question": "Temporal std dev full res. Any text or watermark visible?"}
+[28] view_image {"path": "/home/ctfplayer/workspace/std_crop.png", "question": "Zoomed temporal std crop. Any text?"}
+attached 2 image(s) to the next round
+[29] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import json, numpy as np
+fr=json.load(open('rects.json'))
+print('counts per frame', [len(f) for f in fr][:40])
+from collections import Counter
+c=Counter()
+for f in fr:
+    for r in f: c[tuple(r['c'])]+=1
+print(len(c))
+for k,v in c.most_common(30): print(k,v)
+EOF
+[30] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import json, numpy as np
+fr=json.load(open('rects.json'))
+# look at how rects move: print centers of frame0 and frame1 sorted by x
+for i in range(0,6):
+    print('frame',i)
+    for r in sorted(fr[i], key=lambda r:(r['y'],r['x'])):
+        print('   ',r['x'],r['y'],r['w'],r['h'],r['c'])
+EOF
+[31] run_command cd /home/ctfplayer/workspace && cat > track.py <<'EOF'
+import numpy as np, subprocess, json
+from scipy import ndimage
+W,H=1920,1080
+base=[(233,169,172),(150,192,210),(169,195,172),(153,205,180),(230,177,176),(193,175,195),(207,169,230),(163,199,229)]
+base=np.array(base,dtype=np.int16)
+p=subprocess.Popen(['ffmpeg','-v','error','-i','../ctf_files/finderskeepers.mp4','-pix_fmt','rgb24','-f','rawvideo','-'],stdout=subprocess.PIPE)
+allf=[]
+i=0
+while True:
+    buf=p.stdout.read(W*H*3)
+    if len(buf)<W*H*3: break
+    d=np.frombuffer(buf,dtype=np.uint8).reshape(H,W,3).astype(np.int16)
+    res={}
+    for k,b in enumerate(base):
+        dist=np.abs(d-b).sum(axis=2)
+        mask=dist<25
+        lab,n=ndimage.label(mask)
+        comps=[]
+        for j in range(1,n+1):
+            m=lab==j
+            a=m.sum()
+            if a<3000: continue
+            ys,xs=np.nonzero(m)
+            comps.append(dict(area=int(a),cx=float(xs.mean()),cy=float(ys.mean()),
+                              x0=int(xs.min()),x1=int(xs.max()),y0=int(ys.min()),y1=int(ys.max())))
+        res[k]=comps
+    allf.append(res)
+    i+=1
+json.dump(allf,open('track.json','w'))
+print('frames',len(allf))
+for k in range(8):
+    print(k, base[k], [len(f[str(k)]) for f in allf[:10]])
+EOF
+python3 track.py
+peer findings: 1 new
+[32] run_command cd /home/ctfplayer/workspace && mkdir -p f2 && ffmpeg -v error -i ../ctf_files/finderskeepers.mp4 -vf "select='between(n,190,299)'" -vsync 0 -pix_fmt rgb24 f2/%03d.png && ls f2 | wc -l
+[33] view_image {"path": "/home/ctfplayer/workspace/f2/015.png", "question": "Is there faint text visible? Where?"}
+attached 1 image(s) to the next round
+[34] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, subprocess
+from scipy import ndimage
+W,H=1920,1080
+p=subprocess.Popen(['ffmpeg','-v','error','-i','../ctf_files/finderskeepers.mp4','-pix_fmt','rgb24','-f','rawvideo','-'],stdout=subprocess.PIPE)
+i=0
+info=[]
+while True:
+    buf=p.stdout.read(W*H*3)
+    if len(buf)<W*H*3: break
+    d=np.frombuffer(buf,dtype=np.uint8).reshape(H,W,3).astype(np.int16)
+    mx=d.max(axis=2); mn=d.min(axis=2); mean=d.mean(axis=2)
+    mask=(mx-mn<40)&(mean>22)&(mean<130)
+    lab,n=ndimage.label(mask)
+    boxes=[]
+    for j in range(1,n+1):
+        m=lab==j
+        a=m.sum()
+        if a<40: continue
+        ys,xs=np.nonzero(m)
+        boxes.append((int(xs.min()),int(ys.min()),int(xs.max()),int(ys.max()),int(a)))
+    info.append(boxes)
+    i+=1
+import json
+json.dump(info,open('textboxes.json','w'))
+for i in range(0,300,10):
+    print(i, info[i][:6], len(info[i]))
+EOF
+peer findings: 1 new
+[35] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, subprocess
+from PIL import Image
+W,H=1920,1080
+p=subprocess.Popen(['ffmpeg','-v','error','-i','../ctf_files/finderskeepers.mp4','-pix_fmt','rgb24','-f','rawvideo','-'],stdout=subprocess.PIPE)
+i=0
+crops=[]
+while True:
+    buf=p.stdout.read(W*H*3)
+    if len(buf)<W*H*3: break
+    if i>=185:
+        d=np.frombuffer(buf,dtype=np.uint8).reshape(H,W,3)
+        crops.append(d[40:220, 780:1180].copy())
+    i+=1
+print(len(crops))
+# stack vertically every frame
+st=np.concatenate(crops,axis=0)
+Image.fromarray(st).save('textstack.png')
+print(st.shape)
+EOF
+[36] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, subprocess
+from PIL import Image
+from scipy import ndimage
+W,H=1920,1080
+p=subprocess.Popen(['ffmpeg','-v','error','-i','../ctf_files/finderskeepers.mp4','-pix_fmt','rgb24','-f','rawvideo','-'],stdout=subprocess.PIPE)
+i=0
+out=[]
+while True:
+    buf=p.stdout.read(W*H*3)
+    if len(buf)<W*H*3: break
+    d=np.frombuffer(buf,dtype=np.uint8).reshape(H,W,3).astype(np.int16)
+    mx=d.max(axis=2); mn=d.min(axis=2); mean=d.mean(axis=2)
+    mask=(mx-mn<45)&(mean>25)&(mean<150)
+    lab,n=ndimage.label(mask)
+    best=None
+    for j in range(1,n+1):
+        m=lab==j
+        a=m.sum()
+        if a<60: continue
+        ys,xs=np.nonzero(m)
+        w=xs.max()-xs.min(); h=ys.max()-ys.min()
+        if h<8 or h>40: continue
+        if w<15: continue
+        if best is None or a>best[4]:
+            best=(xs.min(),ys.min(),xs.max(),ys.max(),a)
+    if best:
+        x0,y0,x1,y1,a=best
+        crop=d[max(0,y0-4):y1+5, max(0,x0-4):x1+5]
+        out.append((i,x0,y0,x1,y1,a,crop.astype(np.uint8)))
+    i+=1
+print(len(out))
+for o in out[:20]: print(o[:6])
+np.save('textcrops.npy', np.array([o[6] for o in out],dtype=object),allow_pickle=True)
+import json
+json.dump([list(o[:6]) for o in out],open('textmeta.json','w'))
+EOF
+[37] run_command cd /home/ctfplayer/workspace && cat > textdet.py <<'EOF'
+import numpy as np, subprocess, json
+from scipy import ndimage
+W,H=1920,1080
+p=subprocess.Popen(['ffmpeg','-v','error','-i','../ctf_files/finderskeepers.mp4','-pix_fmt','rgb24','-f','rawvideo','-'],stdout=subprocess.PIPE)
+res=[]
+i=0
+while True:
+    buf=p.stdout.read(W*H*3)
+    if len(buf)<W*H*3: break
+    d=np.frombuffer(buf,dtype=np.uint8).reshape(H,W,3).astype(np.int16)
+    mx=d.max(axis=2); mn=d.min(axis=2); mean=d.mean(axis=2)
+    sat=mx-mn
+    bright=mean>140
+    bd=ndimage.binary_dilation(bright,iterations=4)
+    mask=(sat<50)&(mean>25)&(mean<150)&(~bd)
+    lab,n=ndimage.label(mask, structure=np.ones((3,3)))
+    boxes=[]
+    for j in range(1,n+1):
+        m=lab==j
+        a=int(m.sum())
+        if a<25: continue
+        ys,xs=np.nonzero(m)
+        boxes.append([int(xs.min()),int(ys.min()),int(xs.max()),int(ys.max()),a])
+    res.append(boxes)
+    i+=1
+json.dump(res,open('textboxes2.json','w'))
+print('frames',len(res))
+for i in range(180,300,5):
+    print(i,res[i][:8])
+EOF
+python3 textdet.py
+[38] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, subprocess
+from PIL import Image
+W,H=1920,1080
+p=subprocess.Popen(['ffmpeg','-v','error','-i','../ctf_files/finderskeepers.mp4','-pix_fmt','rgb24','-f','rawvideo','-'],stdout=subprocess.PIPE)
+i=0
+sel={}
+while True:
+    buf=p.stdout.read(W*H*3)
+    if len(buf)<W*H*3: break
+    if i in (200,205,210,220,230,240,250,260,270,280):
+        d=np.frombuffer(buf,dtype=np.uint8).reshape(H,W,3)
+        sel[i]=d[60:320, 820:1300].copy()
+    i+=1
+rows=[np.concatenate([sel[k] for k in sorted(sel)],axis=1)]
+img=np.concatenate(rows,axis=0)
+Image.fromarray(img).resize((img.shape[1]*2,img.shape[0]*2),Image.LANCZOS).save('textrow.png')
+print(img.shape)
+EOF
+[39] view_image {"path": "/home/ctfplayer/workspace/textrow.png", "question": "Ten frames side by side, region around x=820-1300, y=60-320. Read any faint text."}
+attached 1 image(s) to the next round
+[40] run_command cd /home/ctfplayer/workspace && echo 'Y2FudGZpbmtRpdA==' | base64 -d; echo; echo 'Y2FudGZpbmtpdA==' | base64 -d; echo
+[41] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, subprocess
+from PIL import Image
+W,H=1920,1080
+p=subprocess.Popen(['ffmpeg','-v','error','-i','../ctf_files/finderskeepers.mp4','-pix_fmt','rgb24','-f','rawvideo','-'],stdout=subprocess.PIPE)
+i=0
+sel={}
+while True:
+    buf=p.stdout.read(W*H*3)
+    if len(buf)<W*H*3: break
+    if i>=195:
+        d=np.frombuffer(buf,dtype=np.uint8).reshape(H,W,3)
+        sel[i]=d[60:200, 850:1200].copy()
+    i+=1
+for k in sorted(sel):
+    Image.fromarray(sel[k]).resize((350*3,140*3),Image.LANCZOS).save(f'tx_{k:03d}.png')
+print(len(sel))
+EOF
+ls tx_*.png | head -3; ls tx_*.png | wc -l
+[42] view_image {"path": "/home/ctfplayer/workspace/tx_195.png", "question": "Read the faint text"}
+[42] view_image {"path": "/home/ctfplayer/workspace/tx_280.png", "question": "Read the faint text"}
+attached 2 image(s) to the next round
+[43] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, subprocess
+from scipy import ndimage
+from PIL import Image
+W,H=1920,1080
+p=subprocess.Popen(['ffmpeg','-v','error','-i','../ctf_files/finderskeepers.mp4','-pix_fmt','rgb24','-f','rawvideo','-'],stdout=subprocess.PIPE)
+i=0
+best=[]
+while True:
+    buf=p.stdout.read(W*H*3)
+    if len(buf)<W*H*3: break
+    if i>=190:
+        d=np.frombuffer(buf,dtype=np.uint8).reshape(H,W,3).astype(np.int16)
+        mx=d.max(axis=2); mn=d.min(axis=2); mean=d.mean(axis=2)
+        mask=(mx-mn<50)&(mean>28)&(mean<160)
+        lab,n=ndimage.label(mask,np.ones((3,3)))
+        # find largest elongated comp
+        cands=[]
+        for j in range(1,n+1):
+            m=lab==j; a=int(m.sum())
+            if a<100: continue
+            ys,xs=np.nonzero(m)
+            w=xs.max()-xs.min(); h=ys.max()-ys.min()
+            if w<30: continue
+            cands.append((a,w,h,xs.min(),ys.min(),xs.max(),ys.max()))
+        cands.sort(reverse=True)
+        best.append((i,cands[:3]))
+    i+=1
+for i,c in best:
+    print(i,c)
+EOF
+[44] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np, subprocess
+from PIL import Image
+W,H=1920,1080
+p=subprocess.Popen(['ffmpeg','-v','error','-i','../ctf_files/finderskeepers.mp4','-pix_fmt','rgb24','-f','rawvideo','-'],stdout=subprocess.PIPE)
+i=0
+sel={}
+while True:
+    buf=p.stdout.read(W*H*3)
+    if len(buf)<W*H*3: break
+    if i in (240,250,255,260,265,270,275):
+        d=np.frombuffer(buf,dtype=np.uint8).reshape(H,W,3)
+        sel[i]=d.copy()
+    i+=1
+for k,v in sel.items():
+    g=v.astype(np.float32).mean(axis=2)
+    # text region: find where grey text is; stretch 20..90
+    a=np.clip((g-15)/(110-15)*255,0,255).astype(np.uint8)
+    Image.fromarray(a).save(f'enh_{k}.png')
+print('ok')
+EOF
+ls enh_*.png
+[45] view_image {"path": "/home/ctfplayer/workspace/enh_250.png", "question": "Enhanced contrast full frame. Read any text."}
+[45] view_image {"path": "/home/ctfplayer/workspace/enh_270.png", "question": "Enhanced contrast full frame. Read any text."}
+[46] run_command cd /home/ctfplayer/workspace && python3 -c "
+import base64
+for s in ['Y2FudGZpbmtpdA==','Y2FudGZpbmtRpdA==','Y2FudGZpbmRpdA==','Y2FudGZpbmRpdA==']:
+    try: print(s, base64.b64decode(s))
+    except Exception as e: print(s,e)
+print(base64.b64encode(b'cantfindit'))
+print(base64.b64encode(b'cantfinkit'))
+"; which tesseract
+finished: solved reason=solved rounds=46 cost=$0.0384 transcript=C:\Users\Dingus\csaw26_llm_ctf\logs\races\20261113-101136__finders keepers\lane-2\20261113-102055__crypto_finders_keepers_main_deepseek_deepseek-v4_1-flash-1017.json

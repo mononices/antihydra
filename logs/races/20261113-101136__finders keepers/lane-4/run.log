@@ -1,0 +1,150 @@
+[01] run_command ls -la /home/ctfplayer/ctf_files/ && file /home/ctfplayer/ctf_files/*
+[01] run_command cat /tools.txt 2>/dev/null | head -50; which ffmpeg ffprobe zsteg steghide outguess binwalk strings python3
+[02] run_command cd /home/ctfplayer/workspace && ffprobe -v error -show_format -show_streams /home/ctfplayer/ctf_files/finderskeepers.mp4 2>&1 | head -80
+[02] run_command strings -n 6 /home/ctfplayer/ctf_files/finderskeepers.mp4 | head -60; echo ---; binwalk /home/ctfplayer/ctf_files/finderskeepers.mp4 | head -30
+[03] run_command echo 'ZXNucHtkMGNfQHl6QGdsX21uMGpfcG0zejNfZzBfbzAwc30=' | base64 -d; echo; echo 'ZXNucHtkMGNfQHl6QGdsX21uMGpfcG0zejNfZzBfbzAwc30=' | base64 -d | rev
+[04] run_command cd /home/ctfplayer/workspace && mkdir -p frames && ffmpeg -v error -i /home/ctfplayer/ctf_files/finderskeepers.mp4 -vsync 0 frames/f_%04d.png && ls frames | wc -l && du -sh frames
+[04] run_command cd /home/ctfplayer/workspace && python3 -c "
+s='esnp{d0c_@yz@gl_mn0j_pm3z3_g0_o00s}'
+# caesar shifts
+import string
+for k in range(26):
+    out=''
+    for ch in s:
+        if ch.isalpha():
+            base=ord('A') if ch.isupper() else ord('a')
+            out+=chr((ord(ch)-base+k)%26+base)
+        else: out+=ch
+    if 'flag' in out or 'ctf' in out: print(k,out)
+print('---atbash---')
+def atb(ch):
+    if ch.isalpha():
+        base=ord('A') if ch.isupper() else ord('a')
+        return chr(base+25-(ord(ch)-base))
+    return ch
+print(''.join(atb(c) for c in s))
+"
+
+[05] run_command cd /home/ctfplayer/workspace && ffmpeg -v error -i /home/ctfplayer/ctf_files/finderskeepers.mp4 -vf "select='not(mod(n\,10))',scale=320:-1,tile=6x5" -frames:v 1 sheet.png && ls -la sheet.png
+[06] view_image {"path": "/home/ctfplayer/workspace/sheet.png"}
+attached 1 image(s) to the next round
+[07] view_image {"path": "/home/ctfplayer/workspace/frames/f_0001.png"}
+[07] view_image {"path": "/home/ctfplayer/workspace/frames/f_0150.png"}
+attached 2 image(s) to the next round
+[08] create_file {"path": "/home/ctfplayer/workspace/an1.py", "content": "import numpy as np, glob\nfrom PIL import Image\nfiles = sorted(glob.glob('/home/ctfplayer/workspace/frames/*.png'))\nprint(len(files))\nacc = None; acc2 = None; mx = None\ncolors = {}\nfor i, f in enumerate(files):\n    a = np.asarray(Image.open(f).convert('RGB')).astype(np.float32)\n    if acc is None:\n        acc = np.zeros_like(a); acc2 = np.zeros_like(a)\n        mx = a.copy()\n    acc += a; acc2 += a*a\n    mx = np.maximum(mx, a)\n    if i < 3:\n        cols, cnt = np.unique(a.reshape(-1,3), axis=0, return_counts=True)\n        for c, n in zip(cols, cnt):\n            colors[tuple(int(x) for x in c)] = colors.get(tuple(int(x) for x in c),0)+int(n)\nn = len(files)\nmean = acc/n\nvar = acc2/n - mean*mean\nstd = np.sqrt(np.maximum(var,0))\nprint('mean range', mean.min(), mean.max())\nprint('std range', std.min(), std.max())\nImage.fromarray(mean.astype(np.uint8)).save('/home/ctfplayer/workspace/mean.png')\n# contrast-stretched mean\nm = mean - mean.min(); m = m/max(1e-6,(m.max()))\nImage.fromarray((m*255).astype(np.uint8)).save('/home/ctfplayer/workspace/mean_stretch.png')\nImage.fromarray(std.astype(np.uint8)).save('/home/ctfplayer/workspace/std.png')\ns = std/ max(1e-6, std.max()); s*=255\nImage.fromarray(s.astype(np.uint8)).save('/home/ctfplayer/workspace/std_stretch.png')\nImage.fromarray(mx.astype(np.uint8)).save('/home/ctfplayer/workspace/max.png')\nif colors:\n    top = sorted(colors.items(), key=lambda x:-x[1])[:15]\n    print('frame0 top colors:', top)\n"}
+[09] run_command cd /home/ctfplayer/workspace && python3 an1.py
+[10] view_image {"path": "/home/ctfplayer/workspace/mean_stretch.png"}
+[10] view_image {"path": "/home/ctfplayer/workspace/std_stretch.png"}
+attached 2 image(s) to the next round
+[11] run_command cd /home/ctfplayer/workspace && python3 -c "
+from PIL import Image
+im = Image.open('mean_stretch.png')
+print(im.size)
+c = im.crop((850,50,1250,350)).resize((1200,900), Image.LANCZOS)
+c.save('crop1.png')
+im2 = Image.open('mean.png')
+c2 = im2.crop((850,50,1250,350)).resize((1200,900), Image.LANCZOS)
+# stretch
+import numpy as np
+a = np.asarray(c2).astype(np.float32)
+a = (a - a.min())/(a.max()-a.min())*255
+Image.fromarray(a.astype(np.uint8)).save('crop2.png')
+"
+[12] view_image {"path": "/home/ctfplayer/workspace/crop1.png"}
+[12] view_image {"path": "/home/ctfplayer/workspace/crop2.png"}
+attached 2 image(s) to the next round
+[13] create_file {"content": "import numpy as np, glob\nfrom PIL import Image\nfiles = sorted(glob.glob('/home/ctfplayer/workspace/frames/*.png'))\n# accumulate mean and std incrementally using float32\nacc = None; acc2 = None\nfor f in files:\n    a = np.asarray(Image.open(f).convert('RGB')).astype(np.float32)\n    if acc is None:\n        acc = np.zeros_like(a); acc2 = np.zeros_like(a)\n    acc += a; acc2 += a*a\nn = len(files)\nmean = acc/n\nstd = np.sqrt(np.maximum(acc2/n - mean*mean, 0))\nbg = np.array([13,12,17], np.float32)\n# static pixels: low std, mean differs from background\nstatic = (std < 3) & (np.abs(mean - bg).max(axis=2) > 6)\nprint('static px:', static.sum())\nys, xs = np.nonzero(static)\nif len(xs):\n    print('bbox', xs.min(), xs.max(), ys.min(), ys.max())\n# render mask\nimg = np.zeros(mean.shape, np.uint8)\nimg[static] = np.clip(mean[static], 0, 255).astype(np.uint8)\nImage.fromarray(img).save('/home/ctfplayer/workspace/static_mask.png')\n# stretched version\na = mean.copy()\na = (a - 8) / (220-8) * 255\na = np.clip(a, 0, 255)\n# also zero out everywhere std>3 to highlight static structure\na2 = a.copy()\na2[~static] = 0\nImage.fromarray(a2.astype(np.uint8)).save('/home/ctfplayer/workspace/static_only.png')\nnp.save('/home/ctfplayer/workspace/mean.npy', mean)\nnp.save('/home/ctfplayer/workspace/std.npy', std)\nprint('done')\n", "path": "/home/ctfplayer/workspace/an2.py"}
+[14] run_command cd /home/ctfplayer/workspace && python3 an2.py
+[15] run_command cd /home/ctfplayer/workspace && sed -i 's/static = (std < 3)/static = (std.max(axis=2) < 3)/' an2.py && python3 an2.py
+[16] run_command cd /home/ctfplayer/workspace && python3 -c "
+import numpy as np
+from PIL import Image
+mean = np.load('mean.npy')
+# dark stretch: values 11..45 -> 0..255
+a = np.clip((mean-11)/(45-11)*255, 0, 255)
+Image.fromarray(a.astype(np.uint8)).save('mean_dark.png')
+c = Image.open('mean_dark.png').crop((820,20,1320,420)).resize((1500,1200), Image.LANCZOS)
+c.save('mean_dark_crop.png')
+print('ok')
+"
+[17] view_image {"path": "/home/ctfplayer/workspace/mean_dark.png"}
+[17] view_image {"path": "/home/ctfplayer/workspace/mean_dark_crop.png"}
+attached 2 image(s) to the next round
+[18] create_file {"content": "import numpy as np, glob\nfrom PIL import Image\nfiles = sorted(glob.glob('/home/ctfplayer/workspace/frames/*.png'))\nmn = None; mx = None\nfor f in files:\n    a = np.asarray(Image.open(f).convert('RGB')).astype(np.uint8)\n    if mn is None:\n        mn = a.copy(); mx = a.copy()\n    else:\n        np.minimum(mn, a, out=mn)\n        np.maximum(mx, a, out=mx)\nImage.fromarray(mn).save('/home/ctfplayer/workspace/tmin.png')\nImage.fromarray(mx).save('/home/ctfplayer/workspace/tmax.png')\n# stretch the min image (dark layer)\nb = mn.astype(np.float32)\nprint('min range', b.min(), b.max())\ns = np.clip((b-11)/(60-11)*255, 0, 255)\nImage.fromarray(s.astype(np.uint8)).save('/home/ctfplayer/workspace/tmin_stretch.png')\n# even stronger local stretch\ns2 = np.clip((b-12)/(26-12)*255, 0, 255)\nImage.fromarray(s2.astype(np.uint8)).save('/home/ctfplayer/workspace/tmin_stretch2.png')\nprint('done')\n", "path": "/home/ctfplayer/workspace/an3.py"}
+[19] run_command cd /home/ctfplayer/workspace && python3 an3.py
+peer findings: 1 new
+[20] view_image {"path": "/home/ctfplayer/workspace/tmin_stretch2.png"}
+[20] run_command cd /home/ctfplayer/workspace && python3 -c "
+import numpy as np
+from PIL import Image
+# stretch frames 195-300 region: find faint text by amplifying
+for n in [200,210,240,270,300]:
+    im = Image.open(f'frames/f_{n:04d}.png')
+    a = np.asarray(im.convert('RGB')).astype(np.float32)
+    print(n, a.min(), a.max(), a.mean())
+"
+attached 1 image(s) to the next round
+[21] run_command cd /home/ctfplayer/workspace && python3 -c "
+import numpy as np, glob
+from PIL import Image
+# amplify frames 195-300 to reveal faint text
+for n in [204, 240, 300]:
+    a = np.asarray(Image.open(f'frames/f_{n:04d}.png').convert('RGB')).astype(np.float32)
+    # faint text is likely dark gray on black bg; boost where brightness low
+    b = np.clip((a-12)/(40-12)*255,0,255)
+    Image.fromarray(b.astype(np.uint8)).save(f'amp_{n}.png')
+print('ok')
+"
+[21] view_image {"path": "/home/ctfplayer/workspace/amp_204.png"}
+attached 1 image(s) to the next round
+[22] create_file {"content": "import numpy as np, glob\nfrom PIL import Image\nfiles = sorted(glob.glob('/home/ctfplayer/workspace/frames/*.png'))\ncounts = []\nmasks = []\nfor i, f in enumerate(files):\n    a = np.asarray(Image.open(f).convert('RGB')).astype(np.int16)\n    mx = a.max(axis=2); mn = a.min(axis=2)\n    gray = (mx - mn) < 8\n    v = a.mean(axis=2)\n    m = gray & (v > 17) & (v < 80)\n    counts.append(int(m.sum()))\n    masks.append(m)\nfor i, c in enumerate(counts):\n    if c > 200:\n        print(i+1, c)\nnp.save('/home/ctfplayer/workspace/faint_counts.npy', np.array(counts))\n", "path": "/home/ctfplayer/workspace/an4.py"}
+peer findings: 1 new
+[23] run_command cd /home/ctfplayer/workspace && python3 an4.py
+[23] run_command ffprobe -v error -show_entries format_tags:stream_tags -of json /home/ctfplayer/ctf_files/finderskeepers.mp4; python3 -c "
+import struct
+d=open('/home/ctfplayer/ctf_files/finderskeepers.mp4','rb').read()
+i=0
+while i < len(d)-8:
+    sz=struct.unpack('>I',d[i:i+4])[0]; typ=d[i+4:i+8]
+    if sz<8: break
+    print(hex(i), typ, sz)
+    i+=sz
+"
+[24] run_command cd /home/ctfplayer/workspace && python3 -c "
+import numpy as np
+from PIL import Image
+# stack amplified top-center crops for frames 180..300
+crops=[]
+for n in range(180,301,3):
+    a = np.asarray(Image.open(f'frames/f_{n:04d}.png').convert('RGB')).astype(np.float32)
+    c = a[40:280, 600:1400]
+    b = np.clip((c-13)/(45-13)*255,0,255)
+    crops.append(b.astype(np.uint8))
+stack = np.concatenate(crops, axis=0)
+print(stack.shape)
+Image.fromarray(stack).save('stack_top.png')
+"
+[24] run_command cd /home/ctfplayer/workspace && python3 -c "
+d=open('/home/ctfplayer/ctf_files/finderskeepers.mp4','rb').read()
+i=0x1175
+import struct
+sz=struct.unpack('>I',d[i:i+4])[0]
+print(d[i+4:i+8], sz)
+# uuid box: 8 + 16 uuid + data
+payload = d[i+24:i+sz]
+print(payload[:200])
+print('len', len(payload))
+"
+[25] run_command cd /home/ctfplayer/workspace && python3 -c "
+from PIL import Image
+im = Image.open('stack_top.png')
+w,h = im.size
+# split into 5 slices, scale to width 800
+for k in range(5):
+    y0 = k*h//5; y1=(k+1)*h//5
+    im.crop((0,y0,w,y1)).save(f'stack_slice{k}.png')
+print('ok')
+"
+[26] view_image {"path": "/home/ctfplayer/workspace/stack_slice0.png"}
+[26] view_image {"path": "/home/ctfplayer/workspace/stack_slice1.png"}
+attached 1 image(s) to the next round
