@@ -1,0 +1,797 @@
+[01] run_command ls -la /home/ctfplayer/ctf_files/ && file /home/ctfplayer/ctf_files/*
+[01] check_hints {}
+[02] run_command cat /tools.txt 2>/dev/null | head -100; echo ---; which ffmpeg sox python3 sonic-visualiser audacity 2>/dev/null; python3 -c "import numpy, scipy; print('numpy scipy ok')"
+[02] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import wave, struct
+w = wave.open('/home/ctfplayer/ctf_files/12345678 (1).wav')
+print(w.getparams())
+n = w.getnframes()
+print('frames', n, 'seconds', n/44100.0)
+EOF
+[03] run_command cd /home/ctfplayer/workspace && sox "/home/ctfplayer/ctf_files/12345678 (1).wav" -n spectrogram -o spec_full.png -x 2000 -y 1000 -r -l 2>/dev/null; ls -la spec_full.png
+[03] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import wave, numpy as np
+w = wave.open('/home/ctfplayer/ctf_files/12345678 (1).wav')
+data = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16)
+data = data.reshape(-1,2)
+L = data[:,0].astype(np.float64); R = data[:,1].astype(np.float64)
+print('L rms', np.sqrt((L**2).mean()), 'R rms', np.sqrt((R**2).mean()))
+print('max', L.max(), L.min(), R.max(), R.min())
+# check if channels identical
+print('identical channels:', np.array_equal(L,R))
+# check for silence regions
+env = np.abs(data).max(axis=1)
+thresh = 100
+sil = env < thresh
+# find runs of silence
+idx = np.where(np.diff(sil.astype(int)) != 0)[0]
+print('transitions', len(idx))
+print(idx[:50])
+EOF
+[04] view_image {"path": "/home/ctfplayer/workspace/spec_full.png", "question": "Is there hidden text or a pattern in the spectrogram? Describe everything visible, especially any letters, numbers or shapes.", "detail": "high"}
+attached 1 image(s) to the next round
+[05] run_command cd /home/ctfplayer/workspace && sox "/home/ctfplayer/ctf_files/12345678 (1).wav" -n spectrogram -o spec_norot.png -x 2400 -y 1200 -l -z 100 2>/dev/null; ls -la spec_norot.png
+[05] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import wave, numpy as np
+w = wave.open('/home/ctfplayer/ctf_files/12345678 (1).wav')
+data = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16).reshape(-1,2)
+L = data[:,0].astype(np.float64); R = data[:,1].astype(np.float64)
+# envelope per 1000 samples
+import sys
+for name,ch in [('L',L),('R',R)]:
+    env = np.abs(ch).reshape(-1,1000).max(axis=1)
+    nz = np.where(env>50)[0]
+    print(name, 'nonzero blocks', len(nz), 'of', len(env), 'first', nz[:10], 'last', nz[-5:] if len(nz) else None)
+# Save envelope arrays
+np.save('L.npy', L); np.save('R.npy', R)
+# check block structure: is signal piecewise constant?
+print('L unique-ish', len(np.unique(np.round(L[:100000],0))))
+EOF
+[06] view_image {"path": "/home/ctfplayer/workspace/spec_norot.png", "question": "Describe the spectrogram layout: where is the white band, where are the dark line clusters? Is there any text?", "detail": "high"}
+[06] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import wave, numpy as np
+w = wave.open('/home/ctfplayer/ctf_files/12345678 (1).wav')
+data = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16).reshape(-1,2)
+L = data[:,0].astype(np.float64); R = data[:,1].astype(np.float64)
+np.save('L.npy', L); np.save('R.npy', R)
+n = len(L)
+print('n', n)
+for name,ch in [('L',L),('R',R)]:
+    env = np.abs(ch[:n//1000*1000]).reshape(-1,1000).max(axis=1)
+    nz = np.where(env>50)[0]
+    print(name, 'nonzero blocks', len(nz), 'of', len(env), 'first', nz[:10], 'last', nz[-5:] if len(nz) else None)
+EOF
+attached 1 image(s) to the next round
+[07] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np
+L = np.load('L.npy'); R = np.load('R.npy')
+n = len(L)
+# Where does each channel have energy? block=4410 samples (0.1s)
+b = 4410
+for name,ch in [('L',L),('R',R)]:
+    m = len(ch)//b
+    env = np.abs(ch[:m*b]).reshape(m,b).max(axis=1)
+    nz = np.where(env>50)[0]
+    print(name,'energy blocks (0.1s):', nz.min(), nz.max(), 'count', len(nz), 'of', m)
+# look at first part vs last part
+print('L first 25s max', np.abs(L[:int(25*44100)]).max(), 'last 9s max', np.abs(L[int(25*44100):]).max())
+print('R first 25s max', np.abs(R[:int(25*44100)]).max(), 'last 9s max', np.abs(R[int(25*44100):]).max())
+EOF
+[08] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np
+L = np.load('L.npy'); R = np.load('R.npy')
+sr = 44100
+# Write separate wav files for L and R, and for the two time regions
+import wave
+def writewav(path, x, sr=44100):
+    x = np.clip(x, -32768, 32767).astype(np.int16)
+    w = wave.open(path,'wb'); w.setnchannels(1); w.setsampwidth(2); w.setframerate(sr)
+    w.writeframes(x.tobytes()); w.close()
+writewav('L_full.wav', L)
+writewav('R_full.wav', R)
+t0 = int(25.2*sr)
+writewav('L_part1.wav', L[:t0])
+writewav('R_part1.wav', R[:t0])
+writewav('L_part2.wav', L[t0:])
+writewav('R_part2.wav', R[t0:])
+print('done')
+EOF
+ls -la /home/ctfplayer/workspace/*.wav
+[09] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np
+L = np.load('L.npy'); R = np.load('R.npy')
+sr=44100
+# zoom into 22.5-24.0 s in R (the grid pattern)
+seg = R[int(22.5*sr):int(24.0*sr)]
+np.save('seg1.npy', seg)
+seg2 = R[int(28.5*sr):int(30.0*sr)]
+np.save('seg2.npy', seg2)
+print(len(seg), len(seg2))
+EOF
+sox /home/ctfplayer/workspace/R_full.wav -n spectrogram -o grid1.png -t 22.5 -d 1.5 -x 1200 -y 800 -l 2>/dev/null; ls -la grid1.png
+[09] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np
+L = np.load('L.npy'); R = np.load('R.npy')
+sr=44100
+# Look at the low freq region of L part1: what are the pulses?
+# Take a pulse region and do FFT
+seg = L[int(4.0*sr):int(5.0*sr)]
+F = np.abs(np.fft.rfft(seg*np.hanning(len(seg))))
+freqs = np.fft.rfftfreq(len(seg), 1/sr)
+top = np.argsort(F)[::-1][:30]
+for t in sorted(top):
+    print(f'{freqs[t]:8.1f} Hz  {F[t]:.0f}')
+EOF
+[10] view_image {"path": "/home/ctfplayer/workspace/grid1.png", "question": "Describe the grid pattern - how many horizontal lines and vertical lines, spacing, any text?", "detail": "high"}
+attached 1 image(s) to the next round
+[11] run_command cd /home/ctfplayer/workspace && sox R_full.wav r_225_24.wav trim 22.5 1.5 && sox r_225_24.wav -n spectrogram -o grid1b.png -x 1400 -y 900 -l -z 90 2>/dev/null && ls -la grid1b.png
+[12] view_image {"detail": "high", "path": "/home/ctfplayer/workspace/grid1b.png", "question": "Describe this spectrogram of 22.5-24.0s of the right channel. Are there distinct horizontal lines? At what frequencies? Any other structure?"}
+attached 1 image(s) to the next round
+[13] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np
+R = np.load('R.npy')
+sr=44100
+seg = R[int(22.5*sr):int(24.0*sr)]
+# spectrogram with small windows
+win = 2048
+hop = 512
+n = len(seg)
+nf = win//2+1
+frames = []
+for i in range(0, n-win, hop):
+    x = seg[i:i+win]*np.hanning(win)
+    F = np.abs(np.fft.rfft(x))
+    frames.append(F)
+S = np.array(frames)
+freqs = np.fft.rfftfreq(win, 1/sr)
+# find peak frequencies per frame in 0-5000
+mask = freqs < 5000
+Sm = S[:, mask]
+fm = freqs[mask]
+for t in range(0, len(Sm), 20):
+    row = Sm[t]
+    # find local maxima above threshold
+    idx = np.where(row > row.max()*0.3)[0]
+    peaks = []
+    for i in idx:
+        if 0<i<len(row)-1 and row[i]>=row[i-1] and row[i]>=row[i+1]:
+            peaks.append(round(fm[i]))
+    print(f'{22.5 + t*hop/sr:.3f}s', sorted(set(peaks)))
+EOF
+[14] run_command cd /home/ctfplayer/workspace && sox L_full.wav -n spectrogram -o L_spec.png -x 2400 -y 1000 -l -z 90 2>/dev/null; sox R_full.wav -n spectrogram -o R_spec.png -x 2400 -y 1000 -l -z 90 2>/dev/null; ls -la L_spec.png R_spec.png
+[15] view_image {"detail": "high", "path": "/home/ctfplayer/workspace/L_spec.png", "question": "Describe this left-channel spectrogram of the whole file. Any text or patterns?"}
+[15] view_image {"detail": "high", "path": "/home/ctfplayer/workspace/R_spec.png", "question": "Describe this right-channel spectrogram of the whole file. Any text or patterns?"}
+attached 2 image(s) to the next round
+[16] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import struct
+p='/home/ctfplayer/ctf_files/12345678 (1).wav'
+d=open(p,'rb').read()
+print(len(d))
+# parse chunks
+i=12
+while i < len(d)-8:
+    cid = d[i:i+4]; sz = struct.unpack('<I', d[i+4:i+8])[0]
+    print(i, cid, sz)
+    i += 8+sz+(sz&1)
+    if sz==0 and cid==b'data': 
+        pass
+EOF
+[16] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np
+L = np.load('L.npy'); R = np.load('R.npy')
+# cross correlation
+a = L[:int(25*44100)]
+b = R[:int(25*44100)]
+c = np.correlate(a[:200000], b[:200000], 'full')
+print('max corr', c.max(), 'at lag', c.argmax()-199999)
+# check LSB
+lsbL = (L.astype(np.int16) & 1)
+print('LSB L mean', lsbL.mean())
+lsbR = (R.astype(np.int16) & 1)
+print('LSB R mean', lsbR.mean())
+EOF
+[17] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+p='/home/ctfplayer/ctf_files/12345678 (1).wav'
+d=open(p,'rb').read()
+print(d[6064252:].hex())
+print(repr(d[6064252:]))
+EOF
+[18] run_command cd /home/ctfplayer/workspace && python3 -c "
+import base64
+s=b'Ml81dDNAMV8='
+print(base64.b64decode(s))
+print(base64.b64decode(s).hex())
+"
+[18] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np
+L = np.load('L.npy'); R = np.load('R.npy')
+sr=44100
+# The 23.2s region in R: analyze the frequency pattern
+seg = R[int(22.8*sr):int(23.8*sr)]
+win=4096
+hop=1024
+freqs = np.fft.rfftfreq(win,1/sr)
+S=[]
+for i in range(0,len(seg)-win,hop):
+    S.append(np.abs(np.fft.rfft(seg[i:i+win]*np.hanning(win))))
+S=np.array(S)
+# average spectrum
+avg = S.mean(axis=0)
+mask = freqs<6000
+for f,a in zip(freqs[mask], avg[mask]):
+    pass
+# find peaks in avg
+idx = np.where(avg>avg.max()*0.25)[0]
+peaks=[]
+for i in idx:
+    if 0<i<len(avg)-1 and avg[i]>=avg[i-1] and avg[i]>=avg[i+1]:
+        peaks.append(round(freqs[i],1))
+print('avg peaks', peaks)
+EOF
+[20] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np
+L = np.load('L.npy'); R = np.load('R.npy')
+sr=44100
+# compare grid region in L and R
+a = L[int(22.6*sr):int(24.2*sr)]
+b = R[int(22.6*sr):int(24.2*sr)]
+print('L max',np.abs(a).max(),'R max',np.abs(b).max())
+print('corr', np.corrcoef(a,b)[0,1])
+# where does R have energy in time
+env = np.abs(R)
+b2 = 441
+m = len(env)//b2
+e = env[:m*b2].reshape(m,b2).max(axis=1)
+nz = np.where(e>50)[0]
+print('R active 0.01s blocks:', nz.min(), nz.max(), len(nz))
+# find gaps
+d = np.diff(nz)
+print('big gaps', [(nz[i], nz[i+1]) for i in np.where(d>5)[0]])
+EOF
+[20] run_command cd /home/ctfplayer/workspace && sox L_full.wav l_25_34.wav trim 24.5 9.5 && sox l_25_34.wav -n spectrogram -o L_bursts.png -x 1800 -y 1400 -l -z 90 2>/dev/null && ls -la L_bursts.png
+[21] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np
+L = np.load('L.npy'); R = np.load('R.npy')
+sr=44100
+# Find bursts in L: envelope over 441 samples (10ms)
+def bursts(x, thresh=200, minlen=3):
+    b=441
+    m=len(x)//b
+    e=np.abs(x[:m*b]).reshape(m,b).max(axis=1)
+    act = e>thresh
+    # find runs
+    runs=[]
+    i=0
+    while i<m:
+        if act[i]:
+            j=i
+            while j<m and act[j]: j+=1
+            if j-i>=minlen: runs.append((i*b, j*b))
+            i=j
+        else: i+=1
+    return runs
+runsL = bursts(L)
+print('L bursts:', len(runsL))
+for s,e in runsL:
+    print(f'{s/sr:8.3f} - {e/sr:8.3f}  dur {((e-s)/sr):.3f}')
+EOF
+[22] run_command cd /home/ctfplayer/workspace && python3 -c "import matplotlib; print(matplotlib.__version__)"; python3 -c "import librosa; print('librosa', librosa.__version__)" 2>&1 | tail -1
+[22] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np
+L = np.load('L.npy'); R = np.load('R.npy')
+sr=44100
+# Compare L and R in 25-33s
+a = L[int(25*sr):int(33*sr)]
+b = R[int(25*sr):int(33*sr)]
+print('corr 25-33', np.corrcoef(a,b)[0,1], 'maxL',np.abs(a).max(),'maxR',np.abs(b).max())
+# check if identical
+print('identical?', np.array_equal(a,b))
+print('ratio', np.median(a[b!=0]/b[b!=0]))
+EOF
+[23] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np
+L = np.load('L.npy'); R = np.load('R.npy')
+sr=44100
+# The 22.6-24.2s region: what is the fundamental? Check L and R there
+a = L[int(22.6*sr):int(24.2*sr)]
+b = R[int(22.6*sr):int(24.2*sr)]
+print('L max',np.abs(a).max(),'R max',np.abs(b).max())
+print('identical',np.array_equal(a,b))
+print('corr',np.corrcoef(a,b)[0,1])
+# FFT of the whole segment
+w=8192
+freqs=np.fft.rfftfreq(w,1/sr)
+Fa=np.abs(np.fft.rfft(a[:w]*np.hanning(w)))
+Fb=np.abs(np.fft.rfft(b[:w]*np.hanning(w)))
+idx=np.argsort(Fb)[::-1][:20]
+for i in sorted(idx):
+    print(f'{freqs[i]:8.1f} L={Fa[i]:10.0f} R={Fb[i]:10.0f}')
+EOF
+[24] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np
+L = np.load('L.npy'); R = np.load('R.npy')
+sr=44100
+# grid region 22.6-24.2: analyze time structure at each frequency
+seg = R[int(22.6*sr):int(24.2*sr)]
+w=1024; hop=128
+freqs=np.fft.rfftfreq(w,1/sr)
+S=[]
+for i in range(0,len(seg)-w,hop):
+    S.append(np.abs(np.fft.rfft(seg[i:i+w]*np.hanning(w))))
+S=np.array(S)
+# For each of the main frequencies, get the time envelope
+for f in [899, 1324, 1755, 2201, 2648]:
+    fi = np.argmin(np.abs(freqs-f))
+    env = S[:,fi]
+    # binarize
+    th = env.max()*0.3
+    bits = ''.join('1' if v>th else '0' for v in env)
+    print(f, env.max())
+    print(bits)
+EOF
+[25] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+L = np.load('L.npy'); R = np.load('R.npy')
+sr=44100
+seg = R[int(22.6*sr):int(24.2*sr)]
+w=1024; hop=64
+freqs=np.fft.rfftfreq(w,1/sr)
+S=[]
+for i in range(0,len(seg)-w,hop):
+    S.append(np.abs(np.fft.rfft(seg[i:i+w]*np.hanning(w))))
+S=np.array(S).T
+mask = freqs<4500
+plt.figure(figsize=(20,10))
+plt.imshow(20*np.log10(S[mask]+1e-3), aspect='auto', origin='lower',
+           extent=[22.6, 22.6+len(S.T)*hop/sr, 0, 4500], cmap='magma')
+plt.colorbar()
+plt.savefig('grid_lin.png', dpi=100, bbox_inches='tight')
+print('saved')
+EOF
+ls -la grid_lin.png
+[26] view_image {"detail": "high", "path": "/home/ctfplayer/workspace/grid_lin.png", "question": "This is a linear-frequency spectrogram of 22.6-24.2s. Describe the grid of dots: how many rows (frequencies) and columns (time slots)? Do the dots form letters or a pattern?"}
+attached 1 image(s) to the next round
+[27] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np
+L = np.load('L.npy'); R = np.load('R.npy')
+sr=44100
+# The grid region: find precise start/end. Use R channel.
+seg = R[int(22.5*sr):int(24.3*sr)]
+w=512; hop=64
+freqs=np.fft.rfftfreq(w,1/sr)
+S=[]
+for i in range(0,len(seg)-w,hop):
+    S.append(np.abs(np.fft.rfft(seg[i:i+w]*np.hanning(w))))
+S=np.array(S).T  # freq x time
+# rows
+rowf = [899, 1324, 1755, 2201, 2648, 3100, 3550]
+# time envelope: sum over those rows
+env = S[[np.argmin(np.abs(freqs-f)) for f in rowf],:].sum(axis=0)
+th = env.max()*0.25
+act = env>th
+# find runs
+runs=[]
+i=0
+while i<len(act):
+    if act[i]:
+        j=i
+        while j<len(act) and act[j]: j+=1
+        runs.append((i,j))
+        i=j
+    else: i+=1
+print('num runs', len(runs))
+for a,b in runs:
+    t0 = 22.5 + a*hop/sr
+    t1 = 22.5 + b*hop/sr
+    print(f'{t0:.4f} - {t1:.4f}  dur {t1-t0:.4f}')
+EOF
+[28] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np
+R = np.load('R.npy')
+sr=44100
+# Get precise frequencies from a long window over the whole grid region
+seg = R[int(22.6*sr):int(24.2*sr)]
+w=len(seg)//2*2
+F=np.abs(np.fft.rfft(seg*np.hanning(len(seg))))
+freqs=np.fft.rfftfreq(len(seg),1/sr)
+idx=np.argsort(F)[::-1][:60]
+pk=sorted(set(round(freqs[i],1) for i in idx if freqs[i]<5000))
+print(pk)
+# find local maxima
+peaks=[]
+for i in range(1,len(F)-1):
+    if F[i]>F[i-1] and F[i]>=F[i+1] and F[i]>F.max()*0.05 and freqs[i]<6000:
+        peaks.append((freqs[i],F[i]))
+# cluster
+clusters=[]
+for f,a in peaks:
+    if clusters and f-clusters[-1][-1][0] < 30:
+        clusters[-1].append((f,a))
+    else:
+        clusters.append([(f,a)])
+print('clusters:')
+for c in clusters:
+    tot=sum(a for _,a in c)
+    cf = sum(f*a for f,a in c)/tot
+    print(f'  {cf:8.2f} Hz  amp {tot:.0f}  n={len(c)}')
+EOF
+[29] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np
+R = np.load('R.npy')
+sr=44100
+freqs7 = [881.3, 1320.6, 1759.6, 2200.0, 2640.85, 3081.2, 3518.86]
+# time slots: from burst analysis, slots ~ every 0.04s? Actually runs were ~0.013s with gaps.
+# Let's use a fine spectrogram and detect per-slot activity
+seg = R[int(22.6*sr):int(24.3*sr)]
+w=512; hop=64
+freqs=np.fft.rfftfreq(w,1/sr)
+S=[]
+for i in range(0,len(seg)-w,hop):
+    S.append(np.abs(np.fft.rfft(seg[i:i+w]*np.hanning(w))))
+S=np.array(S)
+cols = [np.argmin(np.abs(freqs-f)) for f in freqs7]
+E = S[:,cols]  # time x 7
+# normalize each column
+En = E / E.max(axis=0, keepdims=True)
+# overall activity
+act = En.max(axis=1)
+th=0.25
+active = act>th
+# find runs
+runs=[]; i=0
+while i<len(active):
+    if active[i]:
+        j=i
+        while j<len(active) and active[j]: j+=1
+        runs.append((i,j)); i=j
+    else: i+=1
+print('slots:', len(runs))
+for a,b in runs:
+    mid = (a+b)//2
+    bits = ''.join('1' if En[mid,k]>0.3 else '0' for k in range(7))
+    t0=22.6+a*hop/sr
+    print(f'{t0:.3f} {bits}')
+EOF
+[30] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np
+R = np.load('R.npy')
+sr=44100
+f0=440.0
+tones=[f0*k for k in range(2,9)]
+print('tones', tones)
+# bandpass via Goertzel-like: correlate with complex exponential over sliding window
+seg = R[int(22.6*sr):int(24.3*sr)]
+n=len(seg)
+w=1024
+hop=64
+t=np.arange(w)
+envs=[]
+for f in tones:
+    ref = np.exp(-2j*np.pi*f*t/sr)*np.hanning(w)
+    e=[]
+    for i in range(0,n-w,hop):
+        e.append(abs(np.dot(seg[i:i+w], ref)))
+    envs.append(np.array(e))
+E=np.array(envs)  # 7 x T
+En = E/ E.max(axis=1,keepdims=True)
+# print matrix as text
+th=0.3
+for i in range(En.shape[1]):
+    col = ''.join('#' if En[k,i]>th else '.' for k in range(7))
+    t0 = 22.6+i*hop/sr
+    print(f'{t0:.4f} {col}')
+EOF
+[31] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np
+R = np.load('R.npy')
+sr=44100
+f0=440.0
+tones=[f0*k for k in range(2,9)]
+seg = R[int(22.6*sr):int(24.3*sr)]
+n=len(seg)
+w=1024; hop=64
+t=np.arange(w)
+envs=[]
+for f in tones:
+    ref = np.exp(-2j*np.pi*f*t/sr)*np.hanning(w)
+    e=[]
+    for i in range(0,n-w,hop):
+        e.append(abs(np.dot(seg[i:i+w], ref)))
+    envs.append(np.array(e))
+E=np.array(envs)
+En = E/E.max(axis=1,keepdims=True)
+th=0.3
+act = (En>th).any(axis=0)
+# find runs of activity
+runs=[]; i=0
+while i<len(act):
+    if act[i]:
+        j=i
+        while j<len(act) and act[j]: j+=1
+        runs.append((i,j)); i=j
+    else: i+=1
+print('slots:', len(runs))
+slots=[]
+for a,b in runs:
+    mid=(a+b)//2
+    bits = tuple(1 if En[k,mid]>th else 0 for k in range(7))
+    tmid = 22.6 + ((a+b)/2)*hop/sr
+    dur = (b-a)*hop/sr
+    slots.append((tmid,dur,bits))
+    print(f'{tmid:.4f} dur {dur:.4f} {bits}')
+# save
+import json
+json.dump([(round(t,4),round(d,4),list(b)) for t,d,b in slots], open('slots.json','w'))
+EOF
+[35] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np
+R = np.load('R.npy')
+sr=44100
+f0=440.0
+tones=[f0*k for k in range(2,9)]
+seg = R[int(22.6*sr):int(24.3*sr)]
+n=len(seg)
+w=1024; hop=32
+t=np.arange(w)
+envs=[]
+for f in tones:
+    ref = np.exp(-2j*np.pi*f*t/sr)*np.hanning(w)
+    e=[]
+    for i in range(0,n-w,hop):
+        e.append(abs(np.dot(seg[i:i+w], ref)))
+    envs.append(np.array(e))
+E=np.array(envs)
+En = E/E.max(axis=1,keepdims=True)
+th=0.35
+# find frame-level activity, then group by time slots of ~0.04s
+act = (En>th).any(axis=0)
+# print compact run list with bit patterns at peak
+runs=[]; i=0
+while i<len(act):
+    if act[i]:
+        j=i
+        while j<len(act) and act[j]: j+=1
+        runs.append((i,j)); i=j
+    else: i+=1
+print('num runs', len(runs))
+prev_end=None
+for a,b in runs:
+    mid=(a+b)//2
+    bits=''.join('1' if En[k,mid]>th else '0' for k in range(7))
+    t0=22.6+a*hop/sr; t1=22.6+b*hop/sr
+    gap = '' if prev_end is None else f'gap {t0-prev_end:.4f}'
+    print(f'{t0:.4f}-{t1:.4f} ({t1-t0:.4f}) {bits} {gap}')
+    prev_end=t1
+EOF
+peer findings: 1 new
+peer findings: 1 new
+peer findings: 1 new
+[44] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np
+R = np.load('R.npy')
+sr=44100
+f0=440.0
+tones=[f0*k for k in range(2,9)]
+seg = R[int(22.6*sr):int(24.3*sr)]
+n=len(seg)
+w=1024; hop=64
+t=np.arange(w)
+envs=[]
+for f in tones:
+    ref = np.exp(-2j*np.pi*f*t/sr)*np.hanning(w)
+    e=[]
+    for i in range(0,n-w,hop):
+        e.append(abs(np.dot(seg[i:i+w], ref)))
+    envs.append(np.array(e))
+E=np.array(envs)
+En = E/E.max(axis=1,keepdims=True)
+# binarize and save as image: rows=freq (7), cols=time
+import matplotlib; matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+B = (En>0.3).astype(float)
+plt.figure(figsize=(20,3))
+plt.imshow(B, aspect='auto', origin='lower', cmap='gray_r', interpolation='nearest',
+           extent=[22.6, 22.6+B.shape[1]*hop/sr, 0, 7])
+plt.grid(True, axis='x')
+plt.savefig('bits.png', dpi=120, bbox_inches='tight')
+print('saved', B.shape)
+EOF
+ls -la bits.png
+[45] view_image {"detail": "high", "question": "This is a 7-row binary matrix over time (22.6-24.3s). Each column is a time slot. Do the columns form letters/characters when read as 7-segment patterns or as binary numbers? Describe the pattern column by column.", "path": "/home/ctfplayer/workspace/bits.png"}
+attached 1 image(s) to the next round
+[47] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np
+R = np.load('R.npy')
+sr=44100
+f0=440.0
+tones=[f0*k for k in range(2,9)]
+seg = R[int(22.6*sr):int(24.3*sr)]
+n=len(seg)
+w=1024; hop=64
+t=np.arange(w)
+envs=[]
+for f in tones:
+    ref = np.exp(-2j*np.pi*f*t/sr)*np.hanning(w)
+    e=[]
+    for i in range(0,n-w,hop):
+        e.append(abs(np.dot(seg[i:i+w], ref)))
+    envs.append(np.array(e))
+E=np.array(envs)
+En = E/E.max(axis=1,keepdims=True)
+# Find symbol boundaries: onsets. Use sum of En.
+tot = En.sum(axis=0)
+act = tot>0.5
+runs=[]; i=0
+while i<len(act):
+    if act[i]:
+        j=i
+        while j<len(act) and act[j]: j+=1
+        runs.append((i,j)); i=j
+    else: i+=1
+print('runs', len(runs))
+# print each run with bits at 25% and 75% of run
+for a,b in runs:
+    mid=(a+b)//2
+    bits=''.join('1' if En[k,mid]>0.3 else '0' for k in range(7))
+    t0=22.6+a*hop/sr
+    print(f'{t0:.4f} {bits}  dur {(b-a)*hop/sr:.4f}')
+EOF
+[49] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+# 7-segment digit decoding. Standard mapping (segments a..g -> bits 0..6)
+# We'll try all 5040 permutations of bit order to find one where all observed patterns map to digits 0-9
+import itertools
+pats = [
+(0,1,1,1,0,0,0),(1,0,0,0,1,0,0),(1,0,0,1,0,0,0),(1,1,1,1,1,1,1),
+(0,0,0,1,1,1,1),(0,1,1,0,0,0,0),(1,0,0,0,0,0,0),(0,0,0,0,1,1,0),
+(0,0,0,1,0,0,0),(0,1,1,1,1,0,0),(1,1,1,1,1,0,0),(0,0,0,0,0,1,0),
+(0,0,0,1,1,0,0),(1,0,0,0,1,0,1),(1,1,0,0,1,0,0),(1,0,1,0,1,0,0),
+(1,0,0,1,1,0,0),(1,1,1,1,1,1,1),(0,0,1,0,0,0,0),(0,1,0,1,0,0,0),
+(0,0,1,0,1,0,0),(1,1,0,0,0,1,1),(0,0,1,1,0,0,0),(1,0,0,1,0,0,1)
+]
+# standard 7-seg: a=top, b=top-right, c=bottom-right, d=bottom, e=bottom-left, f=top-left, g=middle
+# digits as (a,b,c,d,e,f,g)
+digits = {
+ '0':(1,1,1,1,1,1,0),'1':(0,1,1,0,0,0,0),'2':(1,1,0,1,1,0,1),'3':(1,1,1,1,0,0,1),
+ '4':(0,1,1,0,0,1,1),'5':(1,0,1,1,0,1,1),'6':(1,0,1,1,1,1,1),'7':(1,1,1,0,0,0,0),
+ '8':(1,1,1,1,1,1,1),'9':(1,1,1,1,0,1,1),
+}
+# build set of valid patterns as bitmask over a..g order
+valid = {}
+for d,p in digits.items():
+    valid[p]=d
+print('valid patterns:')
+for p,d in valid.items(): print(d,p)
+EOF
+[51] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import itertools
+# Observed 7-bit patterns (bits ordered by frequency index 0..6 = 880..3520 Hz)
+obs = [
+(0,1,1,1,0,0,0),(1,0,0,0,1,0,0),(1,0,0,1,0,0,0),(1,1,1,1,1,1,1),
+(0,0,0,1,1,1,1),(0,1,1,0,0,0,0),(1,0,0,0,0,0,0),(0,0,0,0,1,1,0),
+(0,0,0,1,0,0,0),(0,1,1,1,1,0,0),(1,1,1,1,1,0,0),(0,0,0,0,0,1,0),
+(0,0,0,1,1,0,0),(1,0,0,0,1,0,1),(1,1,0,0,1,0,0),(1,0,1,0,1,0,0),
+(1,0,0,1,1,0,0),(0,0,1,0,0,0,0),(0,1,0,1,0,0,0),(0,0,1,0,1,0,0),
+(1,1,0,0,0,1,1),(0,0,1,1,0,0,0),(1,0,0,1,0,0,1),(0,0,1,0,1,0,0),
+]
+digits = {
+ '0':(1,1,1,1,1,1,0),'1':(0,1,1,0,0,0,0),'2':(1,1,0,1,1,0,1),'3':(1,1,1,1,0,0,1),
+ '4':(0,1,1,0,0,1,1),'5':(1,0,1,1,0,1,1),'6':(1,0,1,1,1,1,1),'7':(1,1,1,0,0,0,0),
+ '8':(1,1,1,1,1,1,1),'9':(1,1,1,1,0,1,1),
+}
+# Try all permutations of the 7 bit positions
+best=None
+for perm in itertools.permutations(range(7)):
+    mapping={}
+    ok=True
+    for p in set(obs):
+        q=tuple(p[i] for i in perm)
+        if q in digits.values():
+            mapping[p]=[k for k,v in digits.items() if v==q][0]
+        else:
+            ok=False; break
+    if ok:
+        print('perm',perm,'maps all', len(set(obs)),'patterns')
+        seq=''.join(mapping[p] for p in obs)
+        print(seq)
+        break
+EOF
+peer findings: 1 new
+[54] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np
+R = np.load('R.npy')
+sr=44100
+tones=[440.0*k for k in range(2,9)]
+seg = R[int(22.5*sr):int(24.3*sr)]
+n=len(seg)
+w=1024; hop=32
+t=np.arange(w)
+envs=[]
+for f in tones:
+    ref = np.exp(-2j*np.pi*f*t/sr)*np.hanning(w)
+    e=[]
+    for i in range(0,n-w,hop):
+        e.append(abs(np.dot(seg[i:i+w], ref)))
+    envs.append(np.array(e))
+E=np.array(envs)
+En = E/E.max(axis=1,keepdims=True)
+# Resample to 40 ms per column (1764 samples)
+col = int(0.04*sr/hop)  # frames per column
+T = En.shape[1]//col
+M = En[:, :T*col].reshape(7, T, col).mean(axis=2)
+B = (M>0.25).astype(int)
+print('matrix', B.shape)
+np.save('B7.npy', B)
+# render as image: rows = freq, cols = time; make each cell 20x20 px
+import matplotlib; matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+plt.figure(figsize=(T*0.35, 7*0.35))
+plt.imshow(B, aspect='auto', origin='lower', cmap='gray_r', interpolation='nearest')
+plt.yticks(range(7))
+plt.savefig('B7.png', dpi=100, bbox_inches='tight')
+# print as ascii art, top row first
+for r in range(6,-1,-1):
+    print(''.join('#' if B[r,c] else '.' for c in range(T)))
+EOF
+ls -la B7.png
+[56] view_image {"detail": "high", "path": "/home/ctfplayer/workspace/B7.png", "question": "This is a 7-row binary matrix rendered as an image. Do the columns form recognizable letters or digits? Describe what you see."}
+attached 1 image(s) to the next round
+[58] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np
+R = np.load('R.npy')
+sr=44100
+tones=[440.0*k for k in range(2,9)]
+seg = R[int(22.5*sr):int(24.3*sr)]
+n=len(seg)
+w=1024; hop=16
+t=np.arange(w)
+envs=[]
+for f in tones:
+    ref = np.exp(-2j*np.pi*f*t/sr)*np.hanning(w)
+    e=[]
+    for i in range(0,n-w,hop):
+        e.append(abs(np.dot(seg[i:i+w], ref)))
+    envs.append(np.array(e))
+E=np.array(envs)
+En = E/E.max(axis=1,keepdims=True)
+np.save('En.npy', En)
+print(En.shape, 'hop time', hop/sr)
+# Print ASCII with 10ms columns
+col=int(0.01*sr/hop)
+T=En.shape[1]//col
+M=En[:,:T*col].reshape(7,T,col).mean(axis=2)
+B=(M>0.25).astype(int)
+for r in range(6,-1,-1):
+    print(''.join('#' if B[r,c] else '.' for c in range(T)))
+# also print with 20ms
+col=int(0.02*sr/hop)
+T=En.shape[1]//col
+M=En[:,:T*col].reshape(7,T,col).mean(axis=2)
+B=(M>0.25).astype(int)
+print()
+for r in range(6,-1,-1):
+    print(''.join('#' if B[r,c] else '.' for c in range(T)))
+EOF
+[59] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import numpy as np
+import matplotlib; matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+En = np.load('En.npy')
+hop=16; sr=44100
+for name,dt in [('t10',0.01),('t20',0.02),('t40',0.04)]:
+    col=int(dt*sr/hop)
+    T=En.shape[1]//col
+    M=En[:,:T*col].reshape(7,T,col).mean(axis=2)
+    B=(M>0.25).astype(float)
+    plt.figure(figsize=(T*0.25, 7*0.5))
+    plt.imshow(B, aspect='auto', cmap='gray_r', interpolation='nearest')
+    plt.savefig(f'{name}.png', dpi=100, bbox_inches='tight')
+    print(name, B.shape)
+EOF
+ls -la t10.png t20.png t40.png
+[60] view_image {"detail": "high", "path": "/home/ctfplayer/workspace/t10.png", "question": "This is a 7-row binary matrix at 10ms resolution. Does it look like text rendered in a 7-pixel font? Read any characters you can see."}
+attached 1 image(s) to the next round
+peer findings: 1 new
+finished: unsolved reason=budget rounds=61 cost=$0.2040 transcript=C:\Users\Dingus\csaw26_llm_ctf\logs\evals\20261110-230852__eval\09__12345678\lane-3\20261110-234631__misc_12345678_main_deepseek_deepseek-v4_1-flash.json

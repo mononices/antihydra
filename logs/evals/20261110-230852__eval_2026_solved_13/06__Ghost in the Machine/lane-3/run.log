@@ -1,0 +1,297 @@
+[01] run_command ls -la /home/ctfplayer/ctf_files/ && cat /home/ctfplayer/ctf_files/README.md
+[01] run_command cd /home/ctfplayer/ctf_files && file capture.pcap 2>/dev/null || file files/capture.pcap; ls -la files 2>/dev/null
+[02] run_command which tshark tcpdump capinfos python3; python3 -c "import scapy; print(scapy.__version__)" 2>/dev/null; capinfos /home/ctfplayer/ctf_files/files/capture.pcap 2>/dev/null | head -40
+[03] run_command cd /home/ctfplayer/ctf_files/files && capinfos capture.pcap; echo "---"; tshark -r capture.pcap -c 20 2>&1 | head -30
+[04] run_command cd /home/ctfplayer/ctf_files/files && xxd capture.pcap | head -40; echo "---"; file capture.pcap; xxd capture.pcap | tail -20; wc -c capture.pcap
+[05] run_command mkdir -p /home/ctfplayer/workspace && cd /home/ctfplayer/workspace && python3 - <<'EOF'
+data = bytearray(open('/home/ctfplayer/ctf_files/files/capture.pcap','rb').read())
+print("magic:", data[:4].hex())
+data[0] = 0xd4
+open('fixed.pcap','wb').write(data)
+EOF
+capinfos /home/ctfplayer/workspace/fixed.pcap
+[06] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import struct
+data = open('fixed.pcap','rb').read()
+off = 24
+pkts = []
+while off < len(data):
+    ts_sec, ts_usec, incl, orig = struct.unpack('<IIII', data[off:off+16])
+    pkt = data[off+16:off+16+incl]
+    pkts.append((ts_sec, ts_usec, incl, orig, pkt))
+    off += 16 + incl
+print("num pkts", len(pkts))
+import collections
+# summarize fields
+for i,(ts,tu,incl,orig,pkt) in enumerate(pkts[:10]):
+    eth = pkt[:14]
+    ip = pkt[14:34]
+    udp = pkt[34:42]
+    pay = pkt[42:]
+    print(i, ts, tu, incl, orig, eth.hex(), ip.hex(), udp.hex(), pay.hex())
+EOF
+[07] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import struct, collections
+data = open('fixed.pcap','rb').read()
+off = 24
+pkts = []
+while off < len(data):
+    ts_sec, ts_usec, incl, orig = struct.unpack('<IIII', data[off:off+16])
+    pkt = data[off+16:off+16+incl]
+    pkts.append((ts_sec, ts_usec, incl, orig, pkt))
+    off += 16 + incl
+
+fields = collections.defaultdict(collections.Counter)
+for i,(ts,tu,incl,orig,pkt) in enumerate(pkts):
+    fields['ts_sec'][ts]+=1
+    fields['incl'][incl]+=1
+    fields['orig'][orig]+=1
+    fields['eth_dst'][pkt[0:6].hex()]+=1
+    fields['eth_src'][pkt[6:12].hex()]+=1
+    fields['eth_type'][pkt[12:14].hex()]+=1
+    ip = pkt[14:34]
+    fields['ip_verihl'][ip[0:1].hex()]+=1
+    fields['ip_tos'][ip[1:2].hex()]+=1
+    fields['ip_len'][ip[2:4].hex()]+=1
+    fields['ip_id'][ip[4:6].hex()]+=1
+    fields['ip_flags'][ip[6:8].hex()]+=1
+    fields['ip_ttl'][ip[8:9].hex()]+=1
+    fields['ip_proto'][ip[9:10].hex()]+=1
+    fields['ip_csum'][ip[10:12].hex()]+=1
+    fields['ip_src'][ip[12:16].hex()]+=1
+    fields['ip_dst'][ip[16:20].hex()]+=1
+    udp = pkt[34:42]
+    fields['udp_sport'][udp[0:2].hex()]+=1
+    fields['udp_dport'][udp[2:4].hex()]+=1
+    fields['udp_len'][udp[4:6].hex()]+=1
+    fields['udp_csum'][udp[6:8].hex()]+=1
+    fields['payload'][pkt[42:].hex()]+=1
+
+for k,v in fields.items():
+    if len(v) <= 12:
+        print(k, dict(v))
+    else:
+        print(k, f"{len(v)} distinct", v.most_common(5))
+EOF
+[08] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import struct
+data = open('fixed.pcap','rb').read()
+off = 24
+pkts = []
+while off < len(data):
+    ts_sec, ts_usec, incl, orig = struct.unpack('<IIII', data[off:off+16])
+    pkt = data[off+16:off+16+incl]
+    pkts.append((ts_sec, ts_usec, pkt))
+    off += 16 + incl
+
+for i,(ts,tu,pkt) in enumerate(pkts):
+    sport = struct.unpack('>H', pkt[34:36])[0]
+    ttl = pkt[22]
+    print(f"{i:3d} ts={ts} usec={tu:6d} sport={sport:5d} (0x{sport:04x}) ttl={ttl}")
+EOF
+[09] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import struct
+data = open('fixed.pcap','rb').read()
+off = 24
+pkts = []
+while off < len(data):
+    ts_sec, ts_usec, incl, orig = struct.unpack('<IIII', data[off:off+16])
+    pkt = data[off+16:off+16+incl]
+    pkts.append((ts_sec, ts_usec, pkt))
+    off += 16 + incl
+
+honest = []
+decoy = []
+for i,(ts,tu,pkt) in enumerate(pkts):
+    sport = struct.unpack('>H', pkt[34:36])[0]
+    ttl = pkt[22]
+    if ttl == 64:
+        honest.append((i, sport))
+    else:
+        decoy.append((i, sport, ttl))
+print("honest:", len(honest), "decoy:", len(decoy))
+
+# burst structure of honest packets: same sport runs
+runs = []
+cur = None
+for i, sport in honest:
+    if cur and cur[0]==sport:
+        cur[1].append(i)
+    else:
+        if cur: runs.append(cur)
+        cur = [sport, [i]]
+runs.append(cur)
+print("num runs:", len(runs))
+for sport, idxs in runs:
+    print(f"sport=0x{sport:04x} low=0x{sport&0xff:02x} n={len(idxs)} idx={idxs[0]}..{idxs[-1]}")
+EOF
+[10] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import struct
+data = open('fixed.pcap','rb').read()
+off = 24
+pkts = []
+while off < len(data):
+    ts_sec, ts_usec, incl, orig = struct.unpack('<IIII', data[off:off+16])
+    pkt = data[off+16:off+16+incl]
+    pkts.append((ts_sec*1_000_000+ts_usec, pkt))
+    off += 16 + incl
+
+# honest only
+honest = [(t, pkt) for t,pkt in pkts if pkt[22]==64]
+# group into bursts by contiguous sport
+runs = []
+cur = None
+for t, pkt in honest:
+    sport = struct.unpack('>H', pkt[34:36])[0]
+    if cur and cur[0]==sport:
+        cur[1].append((t,pkt))
+    else:
+        if cur: runs.append(cur)
+        cur = [sport, [(t,pkt)]]
+runs.append(cur)
+
+for sport, items in runs[:12]:
+    ts = [t for t,_ in items]
+    deltas = [ts[i+1]-ts[i] for i in range(len(ts)-1)]
+    print(f"0x{sport:04x}", deltas)
+EOF
+[12] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import struct
+data = open('fixed.pcap','rb').read()
+off = 24
+pkts = []
+while off < len(data):
+    ts_sec, ts_usec, incl, orig = struct.unpack('<IIII', data[off:off+16])
+    pkt = data[off+16:off+16+incl]
+    pkts.append((ts_sec*1_000_000+ts_usec, pkt))
+    off += 16 + incl
+
+honest = [(t, pkt) for t,pkt in pkts if pkt[22]==64]
+runs = []
+cur = None
+for t, pkt in honest:
+    sport = struct.unpack('>H', pkt[34:36])[0]
+    if cur and cur[0]==sport:
+        cur[1].append((t,pkt))
+    else:
+        if cur: runs.append(cur)
+        cur = [sport, [(t,pkt)]]
+runs.append(cur)
+
+# classify deltas
+allbits = []
+for ri,(sport, items) in enumerate(runs):
+    ts = [t for t,_ in items]
+    deltas = [ts[i+1]-ts[i] for i in range(len(ts)-1)]
+    bits = ['1' if d>100000 else '0' for d in deltas]
+    allbits.append((ri, f"0x{sport:04x}", len(items), bits))
+    print(ri, f"0x{sport:04x}", len(items), ''.join(bits), deltas if len(items)!=8 else '')
+EOF
+[14] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import struct
+data = open('fixed.pcap','rb').read()
+off = 24
+pkts = []
+while off < len(data):
+    ts_sec, ts_usec, incl, orig = struct.unpack('<IIII', data[off:off+16])
+    pkt = data[off+16:off+16+incl]
+    pkts.append((ts_sec*1_000_000+ts_usec, pkt))
+    off += 16 + incl
+
+honest = [(t, pkt) for t,pkt in pkts if pkt[22]==64]
+runs = []
+cur = None
+for t, pkt in honest:
+    sport = struct.unpack('>H', pkt[34:36])[0]
+    if cur and cur[0]==sport:
+        cur[1].append((t,pkt))
+    else:
+        if cur: runs.append(cur)
+        cur = [sport, [(t,pkt)]]
+runs.append(cur)
+
+# collect all deltas sorted to see distribution
+alld = []
+for sport, items in runs:
+    ts = [t for t,_ in items]
+    alld += [ts[i+1]-ts[i] for i in range(len(ts)-1)]
+alld.sort()
+print("min", alld[0], "max", alld[-1])
+import collections
+# histogram in 10k buckets
+h = collections.Counter(d//10000 for d in alld)
+for k in sorted(h): print(k*10, "k:", h[k])
+EOF
+[15] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import struct, collections
+data = open('fixed.pcap','rb').read()
+off = 24
+pkts = []
+while off < len(data):
+    ts_sec, ts_usec, incl, orig = struct.unpack('<IIII', data[off:off+16])
+    pkt = data[off+16:off+16+incl]
+    pkts.append((ts_sec*1_000_000+ts_usec, pkt))
+    off += 16 + incl
+
+honest = [(t, pkt) for t,pkt in pkts if pkt[22]==64]
+runs = []
+cur = None
+for t, pkt in honest:
+    sport = struct.unpack('>H', pkt[34:36])[0]
+    if cur and cur[0]==sport:
+        cur[1].append((t,pkt))
+    else:
+        if cur: runs.append(cur)
+        cur = [sport, [(t,pkt)]]
+runs.append(cur)
+
+alld = []
+for sport, items in runs:
+    ts = [t for t,_ in items]
+    alld += [ts[i+1]-ts[i] for i in range(len(ts)-1)]
+alld.sort()
+h = collections.Counter(d//5000 for d in alld)
+for k in sorted(h): print(k*5, "k:", h[k])
+print()
+# also first-packet-of-burst gaps (inter-burst) for honest
+print("inter-burst gaps (last honest of run -> first of next run):")
+for i in range(len(runs)-1):
+    t1 = runs[i][1][-1][0]
+    t2 = runs[i+1][1][0][0]
+    print(i, t2-t1)
+EOF
+[17] run_command cd /home/ctfplayer/workspace && cat > decode1.py <<'EOF'
+import struct
+from itertools import product
+
+data = open('fixed.pcap','rb').read()
+off = 24
+pkts = []
+while off < len(data):
+    ts_sec, ts_usec, incl, orig = struct.unpack('<IIII', data[off:off+16])
+    pkt = data[off+16:off+16+incl]
+    pkts.append((ts_sec*1_000_000+ts_usec, pkt))
+    off += 16 + incl
+
+honest = [(t, pkt) for t,pkt in pkts if pkt[22]==64]
+print("honest count:", len(honest))
+
+# sanity: sport low byte sequence
+sl = [struct.unpack('>H', p[34:36])[0] & 0xff for _,p in honest]
+print("sport low seq unique in order:", [hex(x) for x in sl[:24]])
+print("cycle check:", all(sl[i]==sl[i%6] for i in range(len(sl))))
+
+ts = [t for t,_ in honest]
+deltas = [ts[i+1]-ts[i] for i in range(len(ts)-1)]
+print("num deltas:", len(deltas))
+
+def bits_from(deltas, thresh, invert
+[18] create_file {"path": "/home/ctfplayer/workspace/decode1.py", "content": "import struct\nfrom itertools import product\n\ndata = open('/home/ctfplayer/workspace/fixed.pcap','rb').read()\noff = 24\npkts = []\nwhile off < len(data):\n    ts_sec, ts_usec, incl, orig = struct.unpack('<IIII', data[off:off+16])\n    pkt = data[off+16:off+16+incl]\n    pkts.append((ts_sec*1_000_000+ts_usec, pkt))\n    off += 16 + incl\n\nhonest = [(t, pkt) for t,pkt in pkts if pkt[22]==64]\nprint(\"honest count:\", len(honest))\n\nsl = [struct.unpack('>H', p[34:36])[0] & 0xff for _,p in honest]\nprint(\"sport low seq first 24:\", [hex(x) for x in sl[:24]])\nprint(\"cycle check:\", all(sl[i]==sl[i%6] for i in range(len(sl))))\n\nts = [t for t,_ in honest]\ndeltas = [ts[i+1]-ts[i] for i in range(len(ts)-1)]\nprint(\"num deltas:\", len(deltas))\n\ndef bits_from(deltas, thresh, invert=False):\n    return [ (1 if d>thresh else 0) for d in deltas ]\n\ndef bits_to_bytes(bits):\n    out = []\n    for i in range(0, len(bits)-7, 8):\n        v = 0\n        for b in bits[i:i+8]:\n            v = (v<<1)|b\n        out.append(v)\n    return bytes(out)\n\n# try threshold sweep, both bit orders, both endianness of byte assembly\nfor thresh in range(60000, 140000, 5000):\n    b = bits_from(deltas, thresh)\n    # group in 6 (since sport cycles 6 values) - maybe 6-bit chunks?\n    by = bits_to_bytes(b)\n    print(thresh, by[:40])\n"}
+[19] run_command cd /home/ctfplayer/workspace && python3 decode1.py
+[20] create_file {"content": "import struct\n\ndata = open('/home/ctfplayer/workspace/fixed.pcap','rb').read()\noff = 24\npkts = []\nwhile off < len(data):\n    ts_sec, ts_usec, incl, orig = struct.unpack('<IIII', data[off:off+16])\n    pkt = data[off+16:off+16+incl]\n    pkts.append((ts_sec*1_000_000+ts_usec, pkt))\n    off += 16 + incl\n\nhonest = [(t, pkt) for t,pkt in pkts if pkt[22]==64]\ndecoy  = [(t, pkt) for t,pkt in pkts if pkt[22]!=64]\n\n# group honest into bursts by contiguous sport\nruns = []\ncur = None\nfor t, pkt in honest:\n    sport = struct.unpack('>H', pkt[34:36])[0]\n    if cur and cur[0]==sport:\n        cur[1].append((t,pkt))\n    else:\n        if cur: runs.append(cur)\n        cur = [sport, [(t,pkt)]]\nruns.append(cur)\n\nprint(\"bursts:\", len(runs), \"sizes:\", [len(r[1]) for r in runs])\n\n# intra-burst deltas: 7 per full burst\nintra = []   # list of (burst_idx, deltas list)\nfor bi,(sport, items) in enumerate(runs):\n    ts = [t for t,_ in items]\n    d = [ts[i+1]-ts[i] for i in range(len(ts)-1)]\n    intra.append((bi, sport, d))\n\n# check 4-level clustering\nalld = sorted(d for _,_,ds in intra for d in ds)\nprint(\"n intra deltas:\", len(alld))\nprint(\"sorted sample:\", alld[:5], \"...\", alld[len(alld)//2-2:len(alld)//2+2], \"...\", alld[-5:])\n\n# find gaps in sorted list\ngaps = [(alld[i+1]-alld[i], alld[i], alld[i+1]) for i in range(len(alld)-1)]\ngaps.sort(reverse=True)\nprint(\"largest gaps:\", gaps[:8])\n", "path": "/home/ctfplayer/workspace/decode2.py"}
+[21] run_command cd /home/ctfplayer/workspace && python3 decode2.py
+[22] create_file {"content": "import struct\n\ndata = open('/home/ctfplayer/workspace/fixed.pcap','rb').read()\noff = 24\npkts = []\nwhile off < len(data):\n    ts_sec, ts_usec, incl, orig = struct.unpack('<IIII', data[off:off+16])\n    pkt = data[off+16:off+16+incl]\n    pkts.append((ts_sec*1_000_000+ts_usec, pkt))\n    off += 16 + incl\n\nhonest = [(t, pkt) for t,pkt in pkts if pkt[22]==64]\ndecoy  = [(t, pkt) for t,pkt in pkts if pkt[22]!=64]\n\nruns = []\ncur = None\nfor t, pkt in honest:\n    sport = struct.unpack('>H', pkt[34:36])[0]\n    if cur and cur[0]==sport:\n        cur[1].append((t,pkt))\n    else:\n        if cur: runs.append(cur)\n        cur = [sport, [(t,pkt)]]\nruns.append(cur)\n\nbits = []\nfor bi,(sport, items) in enumerate(runs):\n    ts = [t for t,_ in items]\n    for i in range(len(ts)-1):\n        d = ts[i+1]-ts[i]\n        bits.append(1 if d > 100000 else 0)\nprint(\"bits:\", len(bits))\n\ndef to_bytes(bs):\n    out = bytearray()\n    for i in range(0, len(bs)-7, 8):\n        v = 0\n        for b in bs[i:i+8]:\n            v = (v<<1)|b\n        out.append(v)\n    return bytes(out)\n\nby = to_bytes(bits)\nprint(\"bytes:\", by)\nprint(\"hex:\", by.hex())\n\n# try reversed bit order within byte\ndef to_bytes_lsb(bs):\n    out = bytearray()\n    for i in range(0, len(bs)-7, 8):\n        v = 0\n        for j,b in enumerate(bs[i:i+8]):\n            v |= b << j\n        out.append(v)\n    return bytes(out)\nprint(\"lsb:\", to_bytes_lsb(bits))\n\n# also try inverted\ninv = [1-b for b in bits]\nprint(\"inv:\", to_bytes(inv))\n\n# decoy sport low bytes\ndl = [struct.unpack('>H', p[34:36])[0] & 0xff for _,p in decoy]\nprint(\"decoy low bytes:\", [hex(x) for x in dl])\nprint(\"decoy low as chars:\", ''.join(chr(x) if 32<=x<127 else '.' for x in dl))\ndh = [struct.unpack('>H', p[34:36])[0] for _,p in decoy]\nprint(\"decoy sport:\", [hex(x) for x in dh])\n\n# honest sport low bytes distinct\nhl = sorted(set(struct.unpack('>H', p[34:36])[0] & 0xff for _,p in honest))\nprint(\"honest low distinct:\", [hex(x) for x in hl])\n", "path": "/home/ctfplayer/workspace/decode3.py"}
+[23] run_command cd /home/ctfplayer/workspace && python3 decode3.py
+[24] create_file {"content": "import struct\n\ndata = open('/home/ctfplayer/workspace/fixed.pcap','rb').read()\noff = 24\npkts = []\nwhile off < len(data):\n    ts_sec, ts_usec, incl, orig = struct.unpack('<IIII', data[off:off+16])\n    pkt = data[off+16:off+16+incl]\n    pkts.append((ts_sec*1_000_000+ts_usec, pkt))\n    off += 16 + incl\n\nhonest = [(t, pkt) for t,pkt in pkts if pkt[22]==64]\n\nruns = []\ncur = None\nfor t, pkt in honest:\n    sport = struct.unpack('>H', pkt[34:36])[0]\n    if cur and cur[0]==sport:\n        cur[1].append((t,pkt))\n    else:\n        if cur: runs.append(cur)\n        cur = [sport, [(t,pkt)]]\nruns.append(cur)\n\n# fine histogram of all intra deltas\nalld = []\nfor sport, items in runs:\n    ts = [t for t,_ in items]\n    alld += [ts[i+1]-ts[i] for i in range(len(ts)-1)]\nalld.sort()\nimport collections\nh = collections.Counter(d//2000 for d in alld)\nfor k in sorted(h): print(k*2, \"k:\", h[k])\nprint()\n# print per-burst deltas with sport\nfor bi,(sport, items) in enumerate(runs[:18]):\n    ts = [t for t,_ in items]\n    d = [ts[i+1]-ts[i] for i in range(len(ts)-1)]\n    print(bi, f\"0x{sport:04x}\", d)\n", "path": "/home/ctfplayer/workspace/decode4.py"}
+[25] run_command cd /home/ctfplayer/workspace && python3 decode4.py
+finished: aborted reason=aborted rounds=27 cost=$0.0375 transcript=C:\Users\Dingus\csaw26_llm_ctf\logs\evals\20261110-230852__eval\06__Ghost in the Machine\lane-3\20261110-233455__forensics_Ghost_in_the_Machine_main_deepseek_deepseek-v4_1-flash.json

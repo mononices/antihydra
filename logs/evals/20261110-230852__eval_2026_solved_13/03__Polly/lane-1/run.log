@@ -1,0 +1,48 @@
+[01] run_command ls -la /home/ctfplayer/ctf_files/ && echo "---" && cat /home/ctfplayer/ctf_files/player/main.py && echo "---" && cat /home/ctfplayer/ctf_files/player/requirements.txt
+[01] check_hints {}
+[02] run_command mkdir -p /home/ctfplayer/workspace && cd /home/ctfplayer/workspace && python3 -c "import Crypto; print(Crypto.__version__)"
+[02] record_finding {"text": "Polly crypto: ChaCha20(key=random32B, nonce=9B base_nonce + 3 bytes from xorshift-jump state). First output reveals FULL flag nonce incl. last 3 bytes = state & 0xFFFFFF at random flag_x. Loop lets us pick arbitrary x in [0,2^64): server returns only LOW BYTE of state_at(x,seed) plus an encryption oracle (chosen plaintext up to 4096B) under key+that nonce. state_at is linear over GF(2)^64 in x given fixed seed and shifts derived from shake_256(base_nonce). Plan: recover matrix M columns via queries x=1<<i -> low bits give rows of M restricted to observed bit-width; solve M*x=target for target=t (flag's 3-byte suffix); any solution x gives matching nonce => keystream recovery => decrypt flag by XORing chosen-plaintext ciphertext with same-length zero block... but wait we don't know full t? We DO know it since initial message prints whole nonce! So goal reduces to finding preimage of t mod 24-bit projection using ~k observations per query where k=#bits leaked. If only low byte leaks (8 bits), need cleverer approach than naive column extraction.\n"}
+[03] run_command cd /home/ctfplayer/workspace && timeout 30 python3 -c "
+import socket
+s=socket.create_connection(('polly.chal.csaw.io',5000),timeout=20)
+s.settimeout(8)
+data=b''
+try:
+    while True:
+        d=s.recv(65536)
+        if not d: break
+        data+=d
+except Exception as e:
+    print('exc',e)
+print(repr(data))
+s.close()
+"
+[04] run_command cd /home/ctfplayer/workspace && timeout 60 python3 -c "
+import socket
+s=socket.create_connection(('polly.chal.csaw.io',5000),timeout=20)
+s.settimeout(6)
+def rd():
+    data=b''
+    try:
+        while True:
+            d=s.recv(65536)
+            if not d: break
+            data+=d
+    except Exception: pass
+    return data
+print(repr(rd()))
+for x in ['0','1','2','4','8','16','32','64','128','256','512','1024','2048','4096','8192','16384','32768','65536','131072','262144','524288','1048576','2097152','4194304','8388608','16777216','33554432','67108864','134217728','268435456','536870912','1073741824','2147483648','4294967296']:
+    s.sendall((x+'\n').encode())
+    r=rd()
+    print(x, repr(r))
+s.close()
+"
+peer findings: 2 new
+[05] create_file {"path": "/home/ctfplayer/workspace/probe.py", "content": "import socket, sys, time\n\nHOST, PORT = 'polly.chal.csaw.io', 5000\n\nclass Conn:\n    def __init__(self):\n        self.s = socket.create_connection((HOST, PORT), timeout=15)\n        self.s.settimeout(5)\n        self.buf = b''\n    def read_until(self, marker, timeout=8):\n        end = time.time() + timeout\n        while marker not in self.buf:\n            if time.time() > end:\n                raise TimeoutError(self.buf)\n            try:\n                d = self.s.recv(65536)\n            except socket.timeout:\n                continue\n            if not d:\n                raise EOFError(self.buf)\n            self.buf += d\n        i = self.buf.index(marker) + len(marker)\n        out, self.buf = self.buf[:i], self.buf[i:]\n        return out\n    def send(self, line):\n        self.s.sendall(line + b'\\n')\n\nc = Conn()\nbanner = c.read_until(b'which seed modifier would you like to use?\\n', 15)\nprint('BANNER:', banner.decode(errors='replace'))\n\nxs = [1,2,4,8,16,32,64,128,256,1<<20,1<<24,1<<32,1<<40,1<<48,1<<56,1<<63,(1<<64)-1, 3, 7]\nfor x in xs:\n    c.send(str(x).encode())\n    c.read_until(b'enter a string to be encrypted: ', 10)\n    c.send(b'A'*8)\n    r = c.read_until(b'which seed modifier would you like to use?\\n', 10)\n    print('x=%d ->' % x, r.decode(errors='replace').strip())\nc.s.close()\n"}
+peer findings: 1 new
+[06] run_command cd /home/ctfplayer/workspace && timeout 90 python3 probe.py
+[10] run_command cat -A /home/ctfplayer/ctf_files/player/main.py | sed -n '1,200p' | sed 's/\$$//' | head -200
+[10] create_file {"path": "/home/ctfplayer/workspace/notes_full.py", "content": "# Full source dump for reference\nprint(open('/home/ctfplayer/ctf_files/player/main.py').read())\n"}
+[11] create_file {"path": "/home/ctfplayer/workspace/sim.py", "content": "import os\nfrom hashlib import shake_256\n\nMASK64=(1<<64)-1\ndef build(seed=None):\n    if seed is None: raise ValueError\n    base_nonce=os.urandom(9)\n    material=shake_256(base_nonce).digest(5)\n    available=list(range(1,64)); shifts=[]\n    for b in material[1:]:\n        i=b%len(available); shifts.append(available.pop(i))\n    num=material[0]&1\n    def transform(state,num=num):\n        s=shifts\n        if num%2==0:\n            state ^= (state << s[0]) & MASK64\n            state ^= state >> s[1]\n            state ^= (state << s[2]) & MASK64\n            state ^= state >> s[3]\n        else:\n            state ^= (state >> s[0])\n            state ^= (state << s[1]) & MASK64\n            state ^= (state >> s[2])\n            state ^= (state << s[3]) & MASK64\n        return state & MASK64\n    first=[transform(1<<b) for b in range(64)]\n    jumps=[[first]]\n    cur=jumps[-1][:]\n    # square_operator uses transformation(operator,column): result = XOR of operator[col] where col has bits set; wait re-read source.\n"}
+peer findings: 1 new
+[16] create_file {"path": "/home/ctfplayer/workspace/solver.py", "content": "import os\nfrom hashlib import shake_256\n\nMASK64=(1<<64)-1\n\ndef make_params(base_nonce):\n    material=shake_256(base_nonce).digest(5)\n    available=list(range(1,64)); shifts=[]\n    for b in material[1:]:\n        i=b%len(available); shifts.append(available.pop(i))\n    num=material[0]&1\n    return shifts,num\n\ndef transform(state,shifts,num):\n    if num%2==0:\n        state ^= (state << shifts[0]) & MASK64\n        state ^= state >> shifts[1]\n        state ^= (state << shifts[2]) & MASK64\n        state ^= state >> shifts[3]\n    else:\n        state ^= (state >> shifts[0])\n        state ^= (state << shifts[1])& MASK64\n        state ^= (state >> shifts[2])\n        state ^= (state << shifts[3]) & MASK64\n    return state & MASK64\n\ndef transformation(operator,state):\n    result=0\n    for bit in range(64):\n        if state&(1<<bit): result^=operator[bit]\n    return result&MASK64\n\ndef square_operator(op):\n    return [transformation(op,c) for c in op]\n\ndef build_jump_table(shifts,num):\n    first=[transform(1<<b,shifts,num) for b in range(64)]\n    jumps=[[f] for f in first]\n    # careful: source builds list of lists where each jump is a matrix as list of columns? Let's mimic exactly.\n"}

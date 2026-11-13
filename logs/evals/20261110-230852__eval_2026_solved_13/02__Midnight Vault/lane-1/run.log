@@ -1,0 +1,790 @@
+[01] run_command curl -s -i http://taking-on-the-temple.chal.csaw.io:5000/ | head -100
+[01] get_findings {}
+[02] run_command cd /home/ctfplayer/workspace && for p in stone frost iron altar inventory; do echo "=== /$p ==="; curl -s "http://taking-on-the-temple.chal.csaw.io:5000/$p" | sed 's/</\n</g' | grep -v '^<' | grep -v '^\s*$' | head -60; echo; done
+[03] run_command cd /home/ctfplayer/workspace && curl -s "http://taking-on-the-temple.chal.csaw.io:5000/stone" -o stone.html && curl -s "http://taking-on-the-temple.chal.csaw.io:5000/altar" -o altar.html && curl -s "http://taking-on-the-temple.chal.csaw.io:5000/" -o index.html && echo '--- stone ---' && cat stone.html && echo '--- altar ---' && cat altar.html
+[04] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import base64, re
+ct = "SALKMSKXZYRZEJFEOTMBRRZBRXYCXPNJIIWDRYADAIWKKKBEBUDDGNCXTUUBSJXMQVIVPVBYQEVVRBXMTEFGHRVULFEJZZUTXZIVBABSKQESEWKPKGXNVGTZHIFVWLCAQDHOKIGZZRV"
+print("len", len(ct))
+print(base64.b64decode("Q0hFQ0tTVU1fRkFJTF9OT1RfS0VZ"))
+from collections import Counter
+c = Counter(ct)
+print(sorted(c.items(), key=lambda x:-x[1]))
+# index of coincidence per period
+def ic(s):
+    n=len(s); cnt=Counter(s)
+    return sum(v*(v-1) for v in cnt.values())/(n*(n-1))
+for p in range(1,16):
+    vals=[ic(ct[i::p]) for i in range(p)]
+    print(p, round(sum(vals)/p,4))
+EOF
+[04] run_command cd /home/ctfplayer/workspace && for p in robots.txt source src app.py .git/HEAD flag static/ assets/ admin debug hint; do echo "== $p"; curl -s -o /dev/null -w "%{http_code}\n" "http://taking-on-the-temple.chal.csaw.io:5000/$p"; done; echo; curl -s -i -X POST "http://taking-on-the-temple.chal.csaw.io:5000/stone" -d "answer=test" | tail -20
+[05] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import re, itertools
+ct = "SALKMSKXZYRZEJFEOTMBRRZBRXYCXPNJIIWDRYADAIWKKKBEBUDDGNCXTUUBSJXMQVIVPVBYQEVVRBXMTEFGHRVULFEJZZUTXZIVBABSKQESEWKPKGXNVGTZHIFVWLCAQDHOKIGZZRV"
+insc = "WHAT IS REMEMBERED IS NEVER WRITTEN ONLY ONCE. THE LINE WAS COPIED IN MIRRORED TRIOS."
+ins = re.sub('[^A-Z]','',insc)
+print("inscription letters:", len(ins), ins)
+
+br = "⠠⠞⠁⠅⠑  ⠗⠑⠛⠊⠎⠞⠗⠽ ⠞⠓⠑ ⠛⠗⠕⠥⠏"
+# decode braille manually with standard table
+table = {'a':'1','b':'12','c':'14','d':'145','e':'15','f':'124','g':'1245','h':'125','i':'24','j':'245',
+'k':'13','l':'123','m':'134','n':'1345','o':'135','p':'1234','q':'12345','r':'1235','s':'234','t':'2345',
+'u':'136','v':'1236','w':'2456','x':'1346','y':'13456','z':'1356'}
+inv = {v:k for k,v in table.items()}
+def dec(c):
+    bits = []
+    for i,ch in enumerate(c):
+        if ch != '⠀' and (ord(ch)-0x2800) & (1<<i): bits.append(str(i+1))
+    bits=''.join(bits)
+    return inv.get(bits, '?'+bits)
+print("braille:", ''.join(dec(c) if c!=' ' else ' ' for c in br))
+
+# repeated / mirrored trios in ciphertext
+trip = {}
+for i in range(len(ct)-2):
+    t = ct[i:i+3]
+    trip.setdefault(t, []).append(i)
+mir = [(t, v) for t,v in trip.items() if t[::-1] in trip and t != t[::-1]]
+print("mirror-trio pairs found:", len(mir))
+for t,v in mir[:20]: print(t, v, trip[t[::-1]])
+EOF
+[06] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+codes = {'a':0x01,'b':0x03,'c':0x09,'d':0x19,'e':0x11,'f':0x0b,'g':0x1b,'h':0x13,'i':0x0a,'j':0x1a,
+'k':0x05,'l':0x07,'m':0x0d,'n':0x1d,'o':0x15,'p':0x0f,'q':0x1f,'r':0x17,'s':0x0e,'t':0x1e,
+'u':0x25,'v':0x27,'w':0x3a,'x':0x2d,'y':0x3d,'z':0x35}
+inv = {v:k for k,v in codes.items()}
+br = "⠠⠞⠁⠅⠑  ⠗⠑⠛⠊⠎⠞⠗⠽ ⠞⠓⠑ ⠛⠗⠕⠥⠏"
+out=''
+for c in br:
+    if c==' ': out+=' '
+    else: out+=inv.get(ord(c)-0x2800, '?')
+print(out)
+EOF
+[07] run_command cd /home/ctfplayer/workspace && cat > vig.py <<'EOF'
+import itertools, re
+ct = "SALKMSKXZYRZEJFEOTMBRRZBRXYCXPNJIIWDRYADAIWKKKBEBUDDGNCXTUUBSJXMQVIVPVBYQEVVRBXMTEFGHRVULFEJZZUTXZIVBABSKQESEWKPKGXNVGTZHIFVWLCAQDHOKIGZZRV"
+freq = [0.0817,0.0149,0.0278,0.0425,0.127,0.0223,0.0202,0.0609,0.0697,0.0015,0.0077,0.0403,0.0241,
+0.0675,0.0751,0.0193,0.0009,0.0599,0.0633,0.0906,0.0276,0.0098,0.0236,0.0015,0.0197,0.0007]
+
+def solve(ct, L):
+    key=[]
+    for i in range(L):
+        col = ct[i::L]
+        best=None
+        for s in range(26):
+            n=len(col); ch=0.0
+            cnt=[0]*26
+            for c in col: cnt[(ord(c)-65-s)%26]+=1
+            for a in range(26):
+                e = freq[a]*n
+                ch += (cnt[a]-e)**2/e
+            if best is None or ch<best[0]: best=(ch,s)
+        key.append(best[1])
+    return key
+
+def dec(ct,key):
+    return ''.join(chr(65+(ord(c)-65-key[i%len(key)])%26) for i,c in enumerate(ct))
+
+res=[]
+for L in range(1,21):
+    k=solve(ct,L)
+    p=dec(ct,k)
+    # chi2 of whole plaintext
+    cnt=[0]*26
+    for c in p: cnt[ord(c)-65]+=1
+    n=len(p); ch=sum((cnt[a]-freq[a]*n)**2/(freq[a]*n) for a in range(26))
+    res.append((ch,L,''.join(chr(65+x) for x in k),p))
+res.sort()
+for ch,L,k,p in res[:6]:
+    print(L,k,round(ch,1))
+    print("   ",p[:80])
+EOF
+python3 vig.py
+-> subtask-1 starts: You are working on a CTF crypto challenge (CSAW-style, Flask web app "The Midnight Vault" at http://taking-on-the-temple.chal.csaw.io:5000/). Work only in /home/ctfplayer/workspace. Do NOT submit flags and do NOT use submit/giveup tools.
+
+Known facts (already verified by me):
+- Page /stone (GRANITE SAFE) shows: Braille "⠠⠞⠁⠅⠑  ⠗⠑⠛⠊⠎⠞⠗⠽ ⠞⠓⠑ ⠛⠗⠕⠥⠏" (= "stake registry the group" with dots-45 decoded); Inscription "WHAT IS REMEMBERED IS NEVER WRITTEN ONLY ONCE. THE LINE WAS COPIED IN MIRRORED TRIOS."; Ciphertext (139 uppercase letters): SALKMSKXZYRZEJFEOTMBRRZBRXYCXPNJIIWDRYADAIWKKKBEBUDDGNCXTUUBSJXMQVIVPVBYQEVVRBXMTEFGHRVULFEJZZUTXZIVBABSKQESEWKPKGXNVGTZHIFVWLCAQDHOKIGZZRV ; other markings: base64 "Q0hFQ0tTVU1fRkFJTF9OT1RfS0VZ" = "CHECKSUM_FAIL_NOT_KEY", "LOCK / 04 / 19 / 71", "checksum: 7f1a0d". Page asks: "The vault team needs the recovered plaintext fragment to wake the old registry and crack the first seal. Submit the recovered plaintext fragment." There is a POST form with field name=answer to /stone. Wrong answers -> "The lockbox stays cold and shut."
+- /frost and /iron are locked until the granite fragment is submitted correctly.
+- Index of coincidence of the ciphertext is ~0.0386 overall, no clear dip; per-period average IC does not reveal a small period (best dip at 15, then 13, 20, 3, 9, 6, 11). Monoalphabetic substitution (26! space) not yet ruled out.
+- The inscription hints: "THE LINE WAS COPIED IN MIRRORED TRIOS" (possibly transposition hint). I found exactly one mirrored 3-letter pair in the ciphertext: positions 55 ("XTU") vs 94 ("UTX").
+
+Your task: recover the plaintext fragment for the granite lockbox (the answer to POST /stone answer=<plaintext fragment>).
+
+Strategy suggestions (do them systematically, save intermediate results to /home/ctfplayer/workspace/):
+1. Try all classic transposition interpretations with the "mirrored trios" hint: take every 3rd letter (3 interleaved streams), reverse each stream; try reading ciphertext columns as 3 columns of 46/47; try reversing 3-char blocks; try Vigenere/Beaufort/autokey with keys of length 3 and 9 (9 = 3*3, "trios"); try key derived from braille or inscription ("REGISTRY", "STAKE", "TAKE", "GRANITE", "NINE", "041971" etc.).
+2. Try monoalphabetic substitution hillclimbing (26 letters, standard English quadgram fitness). A 139-letter monoalphabetic cryptogram is very solvable with hillclimbing. Implement quadgram stats yourself (generate from a word list or write out common bigram/trigram tables, or use a hand-coded English quadgram scorer with a decent approximation: e.g. use letter frequencies + common bigram/trigram log-scores from known tables). Try all 26*25*25 = 16250 Caesar-affine starts to escape local maxima. Also try the ciphertext after applying each transposition variant from (1).
+3. Try the "MIRRORED TRIOS" as: plaintext written in groups of 3, each group reversed, then encrypted; invert that.
+4. The plaintext fragment is probably a sentence-like string; it may contain the word REGISTRY (from the braille) or words like KEY/VAULT. Try crib dragging "REGISTRY", "REGISTRAR", "KEY", "VAULT", "GRANITE" at all positions under: Vigenere with key length 3..12 with all keys implied by crib positions; Beaufort; autokey; running key = inscription; running key = braille text; running key with key=inscription repeated; etc. For each (crib, position, cipher-type), check that the implied keystream is English-like/meaningful.
+5. Report: the exact recovered plaintext fragment string, the method/key used, and the exact POST request that yields the "unlocked" page (e.g. curl -X POST -d "answer=..."). If you cannot fully recover it, report the best candidates ranked by English-likeness, with keys.
+
+Files you may write: /home/ctfplayer/workspace/*.py. The ciphertext and page HTML are already saved as /home/ctfplayer/workspace/stone.html. Do not modify files outside /home/ctfplayer/workspace except /home/ctfplayer/notes.md (append-only). Report a compact summary of what you tried, what worked, and the answer string.
+(subtask-1) [01] get_findings {}
+(subtask-1) [01] run_command ls -la /home/ctfplayer/workspace/ /home/ctfplayer/ctf_files/ 2>/dev/null; cat /tools.txt 2>/dev/null | head -50
+(subtask-1) [02] read_file {"path": "/home/ctfplayer/workspace/stone.html"}
+(subtask-1) [02] read_file {"path": "/home/ctfplayer/workspace/vig.py"}
+(subtask-1) [03] read_file {"path": "/home/ctfplayer/workspace/altar.html"}
+(subtask-1) [03] read_file {"path": "/home/ctfplayer/workspace/index.html"}
+(subtask-1) [04] run_command cd /home/ctfplayer/workspace && python3 -c "import nltk" 2>&1; ls /usr/share/dict/ 2>/dev/null; timeout 15 python3 -c "
+import urllib.request
+try:
+    d=urllib.request.urlopen('https://www.gutenberg.org/files/1342/1342-0.txt', timeout=10).read(2000)
+    print('NET OK', d[:60])
+except Exception as e:
+    print('NET FAIL', e)
+"
+(subtask-1) peer findings: 2 new
+(subtask-1) [05] run_command cd /home/ctfplayer/workspace && for p in frost iron inventory; do echo "=== $p ==="; curl -s -m 15 "http://taking-on-the-temple.chal.csaw.io:5000/$p" | head -c 3000; echo; done
+(subtask-1) [06] publish_insight {"kind": "fact", "text": "/frost and /iron are locked behind granite fragment; no extra hints there. Only real stone hints: braille \"TAKE REGISTRY THE GROUP\", inscription \"LINE COPIED IN MIRRORED TRIOS\", LOCK/04/19/71, checksum 7f1a0d, base64 CHECKSUM_FAIL_NOT_KEY. Ciphertext saved at /home/ctfplayer/workspace/stone.html"}
+(subtask-1) [07] run_command cd /home/ctfplayer/workspace && timeout 120 curl -s -m 60 -o pride.txt "https://www.gutenberg.org/files/1342/1342-0.txt" && wc -c pride.txt && timeout 120 curl -s -m 60 -o alice.txt "https://www.gutenberg.org/files/11/11-0.txt" && wc -c alice.txt
+(subtask-1) [08] run_command cd /home/ctfplayer/workspace && timeout 120 curl -s -m 60 -o dracula.txt "https://www.gutenberg.org/files/345/345-0.txt" && wc -c dracula.txt && timeout 120 curl -s -m 60 -o treasure.txt "https://www.gutenberg.org/files/120/120-0.txt" && wc -c treasure.txt
+(subtask-1) [09] create_file {"path": "/home/ctfplayer/workspace/quad.py", "content": "import math, os\n_dir = os.path.dirname(os.path.abspath(__file__))\n\ndef build_quadgram_table():\n    \"\"\"Build quadgram counts from a corpus of books (project gutenberg).\"\"\"\n    files = [os.path.join(_dir, f) for f in ['pride.txt', 'alice.txt', 'dracula.txt', 'treasure.txt']]\n    text = ''\n    for f in files:\n        if not os.path.exists(f):\n            continue\n        with open(f, 'r', errors='ignore') as fh:\n            raw = fh.read()\n        # strip gutenberg header/footer\n        raw = raw.split('*** START OF', 1)[-1]\n        raw = raw.split('*** END OF', 1)[0]\n        text += raw\n    # keep only letters\n    letters = ''.join(c for c in text.upper() if c.isalpha())\n    counts = {}\n    for i in range(len(letters) - 3):\n        q = letters[i:i+4]\n        counts[q] = counts.get(q, 0) + 1\n    return counts\n\nif __name__ == '__main__':\n    c = build_quadgram_table()\n    print(len(c), 'distinct quadgrams')\n    import pickle\n    with open(os.path.join(_dir, 'quads.pkl'), 'wb') as f:\n        pickle.dump(c, f)\n    # print top 20\n    top = sorted(c.items(), key=lambda x: -x[1])[:20]\n    for k, v in top:\n        print(k, v)\n"}
+(subtask-1) [10] run_command cd /home/ctfplayer/workspace && python3 quad.py
+(subtask-1) [11] create_file {"content": "import pickle, math, os, random, itertools, sys\n\n_dir = os.path.dirname(os.path.abspath(__file__))\nwith open(os.path.join(_dir, 'quads.pkl'), 'rb') as f:\n    QUAD = pickle.load(f)\nTOTAL = sum(QUAD.values())\nFLOOR = math.log10(0.01 / TOTAL)\n\ndef score(s):\n    if len(s) < 4:\n        return -99.0\n    t = 0.0\n    for i in range(len(s) - 3):\n        t += QUAD.get(s[i:i+4], 0)\n    return t / math.log(TOTAL)\n\ndef score_norm(s):\n    if len(s) < 4:\n        return -99.0\n    t = 0.0\n    for i in range(len(s) - 3):\n        t += math.log10((QUAD.get(s[i:i+4], 0) + 0.01) / TOTAL)\n    return t / (len(s) - 3)\n\nCT = \"SALKMSKXZYRZEJFEOTMBRRZBRXYCXPNJIIWDRYADAIWKKKBEBUDDGNCXTUUBSJXMQVIVPVBYQEVVRBXMTEFGHRVULFEJZZUTXZIVBABSKQESEWKPKGXNVGTZHIFVWLCAQDHOKIGZZRV\"\n\ndef hillclimb(ct, max_restarts=60, seed=None):\n    rnd = random.Random(seed)\n    best_global = (-1e18, None, None)\n    for restart in range(max_restarts):\n        start = list('ABCDEFGHIJKLMNOPQRSTUVWXYZ')\n        rnd.shuffle(start)\n        cur = start[:]\n        curs = score_norm(''.join(cur[ord(c) - 65] for c in ct))\n        improved = True\n        while improved:\n            improved = False\n            for i in range(25):\n                for j in range(i + 1, 26):\n                    n = cur[:]\n                    n[i], n[j] = n[j], n[i]\n                    ns = score_norm(''.join(n[ord(c) - 65] for c in ct))\n                    if ns > curs:\n                        cur, curs = n, ns\n                        improved = True\n        pt = ''.join(cur[ord(c) - 65] for c in ct)\n        if curs > best_global[0]:\n            best_global = (curs, ''.join(cur), pt)\n            print(f\"[restart {restart}] score {curs:.4f}\")\n            print(pt[:100])\n            sys.stdout.flush()\n    return best_global\n\nif __name__ == '__main__':\n    variants = {\n        'plain': CT,\n        'rev': CT[::-1],\n    }\n    # mirrored trios: reverse every 3-char block\n    v = ''\n    for i in range(0, len(CT), 3):\n        v += CT[i:i+3][::-1]\n    variants['rev3blocks'] = v\n    # reverse whole then rev3blocks\n    v2 = ''\n    R = CT[::-1]\n    for i in range(0, len(R), 3):\n        v2 += R[i:i+3][::-1]\n    variants['rev_then_rev3'] = v2\n    # three interleaved streams reversed individually, recombined\n    streams = [CT[i::3][::-1] for i in range(3)]\n    out = []\n    for i in range(len(CT)):\n        out.append(streams[i % 3][i // 3])\n    variants['interleave_rev'] = ''.join(out)\n    # take every 3rd letter concatenated\n    variants['every3_a'] = CT[0::3] + CT[1::3] + CT[2::3]\n    variants['every3_b'] = CT[2::3] + CT[1::3] + CT[0::3]\n\n    results = []\n    for name, c in variants.items():\n        print(f\"=== {name} ===\")\n        s, key, pt = hillclimb(c, max_restarts=30)\n        results.append((s, name, key, pt))\n    results.sort(reverse=True)\n    print(\"\\n\\n######## BEST ########\")\n    for s, name, key, pt in results[:3]:\n        print(name, s)\n        print(pt)\n", "path": "/home/ctfplayer/workspace/hill.py"}
+(subtask-1) [12] run_command cd /home/ctfplayer/workspace && timeout 280 python3 hill.py 2>&1 | tail -40
+(subtask-1) [13] create_file {"content": "import pickle, math, os, random, sys\n\n_dir = os.path.dirname(os.path.abspath(__file__))\nwith open(os.path.join(_dir, 'quads.pkl'), 'rb') as f:\n    QUAD = pickle.load(f)\nTOTAL = sum(QUAD.values())\n\ndef score_norm(s):\n    if len(s) < 4:\n        return -99.0\n    t = 0.0\n    for i in range(len(s) - 3):\n        t += math.log10((QUAD.get(s[i:i+4], 0) + 0.01) / TOTAL)\n    return t / (len(s) - 3)\n\nCT = \"SALKMSKXZYRZEJFEOTMBRRZBRXYCXPNJIIWDRYADAIWKKKBEBUDDGNCXTUUBSJXMQVIVPVBYQEVVRBXMTEFGHRVULFEJZZUTXZIVBABSKQESEWKPKGXNVGTZHIFVWLCAQDHOKIGZZRV\"\n\ndef hillclimb(ct, max_restarts=40, seed=None, verbose=True):\n    rnd = random.Random(seed)\n    best_global = (-1e18, None, None)\n    for restart in range(max_restarts):\n        start = list('ABCDEFGHIJKLMNOPQRSTUVWXYZ')\n        rnd.shuffle(start)\n        cur = start[:]\n        curs = score_norm(''.join(cur[ord(c) - 65] for c in ct))\n        improved = True\n        while improved:\n            improved = False\n            for i in range(25):\n                for j in range(i + 1, 26):\n                    n = cur[:]\n                    n[i], n[j] = n[j], n[i]\n                    ns = score_norm(''.join(n[ord(c) - 65] for c in ct))\n                    if ns > curs:\n                        cur, curs = n, ns\n                        improved = True\n        pt = ''.join(cur[ord(c) - 65] for c in ct)\n        if curs > best_global[0]:\n            best_global = (curs, ''.join(cur), pt)\n            if verbose:\n                print(f\"[restart {restart}] score {curs:.4f}\")\n                print(pt[:100])\n                sys.stdout.flush()\n    return best_global\n\nif __name__ == '__main__':\n    s, key, pt = hillclimb(CT, max_restarts=40)\n    print(\"\\nBEST mono on raw CT:\", s)\n    print(key)\n    print(pt)\n", "path": "/home/ctfplayer/workspace/hill_mono.py"}
+(subtask-1) [14] run_command cd /home/ctfplayer/workspace && timeout 280 python3 hill_mono.py 2>&1 | tail -10
+<- subtask-1 done (max_rounds), $0.011
+[08] spawn_subtask You are working on a CTF crypto challenge (CSAW-style, Flask web app "The Midnight Vault" at http://taking-on-the-temple.chal.csaw.io:5000/). Work only in /home/ctfplayer/workspace. Do NOT submit flags and do NOT use submit/giveup tools.
+
+Known facts (already verified by me):
+- Page /stone (GRANITE SAFE) shows: Braille "⠠⠞⠁⠅⠑  ⠗⠑⠛⠊⠎⠞⠗⠽ ⠞⠓⠑ ⠛⠗⠕⠥⠏" (= "stake registry the group" with dots-45 decoded); Inscription "WHAT IS REMEMBERED IS NEVER WRITTEN ONLY ONCE. THE LINE WAS COPIED IN MIRRORED TRIOS."; Ciphertext (139 uppercase letters): SALKMSKXZYRZEJFEOTMBRRZBRXYCXPNJIIWDRYADAIWKKKBEBUDDGNCXTUUBSJXMQVIVPVBYQEVVRBXMTEFGHRVULFEJZZUTXZIVBABSKQESEWKPKGXNVGTZHIFVWLCAQDHOKIGZZRV ; other markings: base64 "Q0hFQ0tTVU1fRkFJTF9OT1RfS0VZ" = "CHECKSUM_FAIL_NOT_KEY", "LOCK / 04 / 19 / 71", "checksum: 7f1a0d". Page asks: "The vault team needs the recovered plaintext fragment to wake the old registry and crack the first seal. Submit the recovered plaintext fragment." There is a POST form with field name=answer to /stone. Wrong answers -> "The lockbox stays cold and shut."
+- /frost and /iron are locked until the granite fragment is submitted correctly.
+- Index of coincidence of the ciphertext is ~0.0386 overall, no clear dip; per-period average IC does not reveal a small period (best dip at 15, then 13, 20, 3, 9, 6, 11). Monoalphabetic substitution (26! space) not yet ruled out.
+- The inscription hints: "THE LINE WAS COPIED IN MIRRORED TRIOS" (possibly transposition hint). I found exactly one mirrored 3-letter pair in the ciphertext: positions 55 ("XTU") vs 94 ("UTX").
+
+Your task: recover the plaintext fragment for the granite lockbox (the answer to POST /stone answer=<plaintext fragment>).
+
+Strategy suggestions (do them systematically, save intermediate results to /home/ctfplayer/workspace/):
+1. Try all classic transposition interpretations with the "mirrored trios" hint: take every 3rd letter (3 interleaved streams), reverse each stream; try reading ciphertext columns as 3 columns of 46/47; try reversing 3-char blocks; try Vigenere/Beaufort/autokey with keys of length 3 and 9 (9 = 3*3, "trios"); try key derived from braille or inscription ("REGISTRY", "STAKE", "TAKE", "GRANITE", "NINE", "041971" etc.).
+2. Try monoalphabetic substitution hillclimbing (26 letters, standard English quadgram fitness). A 139-letter monoalphabetic cryptogram is very solvable with hillclimbing. Implement quadgram stats yourself (generate from a word list or write out common bigram/trigram tables, or use a hand-coded English quadgram scorer with a decent approximation: e.g. use letter frequencies + common bigram/trigram log-scores from known tables). Try all 26*25*25 = 16250 Caesar-affine starts to escape local maxima. Also try the ciphertext after applying each transposition variant from (1).
+3. Try the "MIRRORED TRIOS" as: plaintext written in groups of 3, each group reversed, then encrypted; invert that.
+4. The plaintext fragment is probably a sentence-like string; it may contain the word REGISTRY (from the braille) or words like KEY/VAULT. Try crib dragging "REGISTRY", "REGISTRAR", "KEY", "VAULT", "GRANITE" at all positions under: Vigenere with key length 3..12 with all keys implied by crib positions; Beaufort; autokey; running key = inscription; running key = braille text; running key with key=inscription repeated; etc. For each (crib, position, cipher-type), check that the implied keystream is English-like/meaningful.
+5. Report: the exact recovered plaintext fragment string, the method/key used, and the exact POST request that yields the "unlocked" page (e.g. curl -X POST -d "answer=..."). If you cannot fully recover it, report the best candidates ranked by English-likeness, with keys.
+
+Files you may write: /home/ctfplayer/workspace/*.py. The ciphertext and page HTML are already saved as /home/ctfplayer/workspace/stone.html. Do not modify files outside /home/ctfplayer/workspace except /home/ctfplayer/notes.md (append-only). Report a compact summary of what you tried, what worked, and the answer string.
+peer findings: 2 new
+[09] run_command cd /home/ctfplayer/workspace && ls -la && for f in hill_mono.py hill.py vig.py; do echo "== $f"; cat $f 2>/dev/null | head -50; done
+[09] run_command cd /home/ctfplayer/workspace && curl -s "http://taking-on-the-temple.chal.csaw.io:5000/iron" | sed 's/</\n</g' | grep -v '^<' | grep -v '^\s*$'
+[10] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import re
+ct = "SALKMSKXZYRZEJFEOTMBRRZBRXYCXPNJIIWDRYADAIWKKKBEBUDDGNCXTUUBSJXMQVIVPVBYQEVVRBXMTEFGHRVULFEJZZUTXZIVBABSKQESEWKPKGXNVGTZHIFVWLCAQDHOKIGZZRV"
+insc = "WHAT IS REMEMBERED IS NEVER WRITTEN ONLY ONCE. THE LINE WAS COPIED IN MIRRORED TRIOS."
+ins = re.sub('[^A-Z]','',insc)
+brwords = "STAKE REGISTRY THE GROUP"
+brk = re.sub('[^A-Z]','',brwords)
+brw2 = "TAKE REGISTRY THE GROUP"
+brk2 = re.sub('[^A-Z]','',brw2)
+
+def vig_dec(ct, key):
+    return ''.join(chr(65+(ord(c)-65-(ord(key[i%len(key)])-65))%26) for i,c in enumerate(ct))
+def beau_dec(ct, key):
+    return ''.join(chr(65+(ord(key[i%len(key)])-ord(c))%26) for i,c in enumerate(ct))
+def beau_dec2(ct, key):  # (c - k) variant of beaufort-ish
+    return ''.join(chr(65+(ord(c)-ord(key[i%len(key)]))%26) for i,c in enumerate(ct))
+def auto_dec(ct, key):
+    out=[]; ks=[ord(c)-65 for c in key]
+    for i,c in enumerate(ct):
+        k = ks[i]
+        p = (ord(c)-65-k)%26
+        out.append(chr(65+p)); ks.append(p)
+    return ''.join(out)
+
+keys = {"inscription":ins, "insc_x2":ins*3, "braille":brk, "braille2":brk2, "granite":"GRANITE", "registry":"REGISTRY", "stake":"STAKE", "LOCK041971":"LOCK"+"041971", "mirroredtrios":"MIRROREDTRIOS", "remembered":"REMEMBERED"}
+for name,k in keys.items():
+    for fn_name, fn in (("vig",vig_dec),("beau",beau_dec),("c-k",beau_dec2)):
+        p = fn(ct,k)
+        print(f"{name:14s} {fn_name:5s} {p[:75]}")
+EOF
+[11] create_file {"path": "/home/ctfplayer/workspace/autok.py", "content": "import math, re, itertools\nfrom collections import Counter\n\nCT = \"SALKMSKXZYRZEJFEOTMBRRZBRXYCXPNJIIWDRYADAIWKKKBEBUDDGNCXTUUBSJXMQVIVPVBYQEVVRBXMTEFGHRVULFEJZZUTXZIVBABSKQESEWKPKGXNVGTZHIFVWLCAQDHOKIGZZRV\"\n\n# english bigram log probs from local gutenberg texts\ntxt = \"\"\nfor fn in (\"alice.txt\",\"dracula.txt\",\"pride.txt\",\"treasure.txt\"):\n    txt += open(fn, encoding='utf-8', errors='ignore').read().upper()\ntxt = re.sub('[^A-Z]', '', txt)\nbi = Counter(txt[i:i+2] for i in range(len(txt)-1))\ntot = sum(bi.values())\ndef blg(s):\n    return math.log10((bi.get(s,0)+0.1)/tot)\n\ndef solve_chain_pairs(ct, m):\n    \"\"\"plaintext-autokey: c_i = p_i + p_{i-m} (i>=m); chains per residue class.\n       returns (score, primer_letters, plaintext)\"\"\"\n    n = len(ct)\n    C = [ord(c)-65 for c in ct]\n    best_total = None\n    chains = []\n    for r in range(m):\n        idx = list(range(r, n, m))\n        if not idx: continue\n        # chain: p[idx[0]] = s (unknown, primer), p[idx[k]] = C[idx[k]] - p[idx[k-1]]\n        best = None\n        for s in range(26):\n            vals = [s]\n            for k in range(1, len(idx)):\n                vals.append((C[idx[k]] - vals[k-1]) % 26)\n            sc = 0.0\n            for k in range(len(idx)-1):\n                sc += blg(chr(65+vals[k]) + chr(65+vals[k+1]))\n            if best is None or sc > best[0]:\n                best = (sc, vals)\n        chains.append((idx, best[1]))\n        best_total = (best_total[0]+best[0]) if best_total else best[0]\n    # build plaintext\n    p = [0]*n\n    for idx, vals in chains:\n        for k, i in enumerate(idx):\n            p[i] = vals[k]\n    return best_total, ''.join(chr(65+x) for x in p)\n\nres = []\nfor m in range(1, 17):\n    sc, p = solve_chain_pairs(CT, m)\n    res.append((sc, m, p))\nres.sort(reverse=True)\nfor sc, m, p in res[:5]:\n    print(f\"m={m} score={sc:.2f}\")\n    print(\"   \", p)\nprint()\nprint(\"=== cipher-autokey variant: c_i = p_i + c_{i-m} ===\")\ndef solve_cipher_autokey(ct, m):\n    n=len(ct); C=[ord(c)-65 for c in ct]\n    p=[0]*n\n    for r in range(m):\n        idx=list(range(r,n,m))\n        p[idx[0]] = (C[idx[0]] - 0) % 26  # primer unknown; try all\n        best=None\n        for s in range(26):\n            vals=[s]\n            for k in range(1,len(idx)):\n                vals.append((C[idx[k]]-C[idx[k-1]])%26)  # actually p_k = c_k - c_{k-1} independent of s\n            # only first letter depends on s; digraph score with next chain\n            sc = blg(chr(65+vals[0])+ (chr(65+vals[1]) if len(vals)>1 else 'A'))\n            if best is None or sc>best[0]: best=(sc,vals)\n        for k,i in enumerate(idx): p[i]=best[1][k]\n    return ''.join(chr(65+x) for x in p)\nfor m in range(1,10):\n    print(m, solve_cipher_autokey(CT,m)[:80])\n"}
+peer findings: 2 new
+[12] run_command cd /home/ctfplayer/workspace && timeout 120 python3 autok.py
+[13] run_command cd /home/ctfplayer/workspace && sed -i 's/best_total = (best_total\[0\]+best\[0\]) if best_total else best\[0\]/best_total = (best_total + best[0]) if best_total is not None else best[0]/' autok.py && timeout 120 python3 autok.py
+[14] create_file {}
+[15] create_file {"path": "/home/ctfplayer/workspace/sweep.py", "content": "import math, re, itertools\nfrom collections import Counter\n\nCT = \"SALKMSKXZYRZEJFEOTMBRRZBRXYCXPNJIIWDRYADAIWKKKBEBUDDGNCXTUUBSJXMQVIVPVBYQEVVRBXMTEFGHRVULFEJZZUTXZIVBABSKQESEWKPKGXNVGTZHIFVWLCAQDHOKIGZZRV\"\n\ntxt = \"\"\nfor fn in (\"alice.txt\",\"dracula.txt\",\"pride.txt\",\"treasure.txt\"):\n    txt += open(fn, encoding='utf-8', errors='ignore').read().upper()\ntxt = re.sub('[^A-Z]', '', txt)\nbi = Counter(txt[i:i+2] for i in range(len(txt)-1))\ntot = sum(bi.values())\ndef score(s):\n    return sum(blg_get(s[i:i+2]) for i in range(len(s)-1))/max(1,len(s)-1)\ndef blg_get(s):\n    return math.log10((bi.get(s,0)+0.1)/tot)\n\nWORDS = set()\nfor fn in (\"alice.txt\",\"dracula.txt\",\"pride.txt\",\"treasure.txt\"):\n    for w in re.findall('[A-Z]{2,}', open(fn, encoding='utf-8', errors='ignore').read().upper()):\n        WORDS.add(w)\nWORDS = sorted(WORDS)\n\ndef vig_dec(ct, key):\n    return ''.join(chr(65+(ord(c)-65-(ord(key[i%len(key)])-65))%26) for i,c in enumerate(ct))\ndef beau_dec(ct, key):\n    return ''.join(chr(65+(ord(key[i%len(key)])-ord(c))%26) for i,c in enumerate(ct))\ndef ck_dec(ct, key):\n    return ''.join(chr(65+(ord(c)-ord(key[i%len(key)]))%26) for i,c in enumerate(ct))\ndef vig_enc(pt, key):\n    return ''.join(chr(65+(ord(c)-65+(ord(key[i%len(key)])-65))%26) for i,c in enumerate(pt))\n\nres = []\ndef add(name, k, p):\n    res.append((score(p), name, k, p))\n\n# caesar / affine\nfor a in (1,3,5,7,9,11,15,17,19,21,23,25):\n    for b in range(26):\n        p = ''.join(chr(65+((a*(ord(c)-65)+b)%26)) for c in CT)\n        add(f\"affine a={a} b={b}\", f\"{a},{b}\", p)\n# atbash\nadd(\"atbash\",\"\",''.join(chr(65+((25-(ord(c)-65))%26)) for c in CT))\n\n# keyword ciphers from page vocabulary\nKW = [\"STAKE\",\"REGISTRY\",\"GROUP\",\"GRANITE\",\"FROST\",\"IRON\",\"VAULT\",\"MIDNIGHT\",\"REMEMBERED\",\n      \"WRITTEN\",\"MIRRORED\",\"TRIOS\",\"LINE\",\"COPIED\",\"ONCE\",\"NEVER\",\"WHAT\",\"CHECKSUM\",\n      \"LOCK\",\"KEY\",\"DIVIDED\",\"OLD\",\"TEMPLE\",\"BLACK\",\"MARKET\",\"CREW\",\"LEDGER\",\"SNOW\",\n      \"SAFEHOUSE\",\"GHOST\",\"LOCKBOX\",\"FRAGMENT\",\"SEAL\",\"ALTAR\",\"MAP\",\"INVENTORY\"]\nfor w in KW:\n    for fn_name, fn in ((\"vig\",vig_dec),(\"beau\",beau_dec),(\"ck\",ck_dec)):\n        add(f\"{fn_name}:{w}\", w, fn(CT,w))\n        add(f\"{fn_name}:rev{w}\", w[::-1], fn(CT,w[::-1]))\n    # keyword-mixed alphabet substitution\n    alpha = w + ''.join(c for c in \"ABCDEFGHIJKLMNOPQRSTUVWXYZ\" if c not in w)\n    p = ''.join(alpha[ord(c)-65] for c in CT)\n    add(\"kwsub:\"+w, w, p)\n    pinv = {v:i for i,v in enumerate(alpha)}\n    p = ''.join(chr(65+pinv[ord(c)-65]) for c in CT)\n    add(\"kwsubinv:\"+w, w, p)\n\nres.sort(reverse=True)\nfor s,name,k,p in res[:25]:\n    print(f\"{s:7.4f} {name:20s} {p[:70]}\")\n\n# also: try every dict word (len>=3) as vigenere key - big list but fast enough?\nprint(\"\\ntotal dict words:\", len(WORDS))\nbest=[]\nfor w in WORDS:\n    if len(w)>15: continue\n    p = vig_dec(CT,w)\n    s = score(p)\n    best.append((s,w,p))\nbest.sort(reverse=True)\nfor s,w,p in best[:10]:\n    print(f\"{s:7.4f} vig:{w:15s} {p[:70]}\")\n"}
+[16] run_command cd /home/ctfplayer/workspace && timeout 280 python3 sweep.py
+[17] run_command cd /home/ctfplayer/workspace && sed -i 's/pinv = {v:i for i,v in enumerate(alpha)}/pinv = {ord(v)-65:i for i,v in enumerate(alpha)}/; s/p = .\.join(chr(65+pinv\[ord(c)-65\]) for c in CT)/p = "".join(chr(65+pinv[ord(c)-65]) for c in CT)/' sweep.py && timeout 280 python3 sweep.py
+[19] create_file 
+[20] create_file {"path": "/home/ctfplayer/workspace/vigsolve.py", "content": "import math, random, itertools\nfrom collections import Counter\n\nCT = \"SALKMSKXZYRZEJFEOTMBRRZBRXYCXPNJIIWDRYADAIWKKKBEBUDDGNCXTUUBSJXMQVIVPVBYQEVVRBXMTEFGHRVULFEJZZUTXZIVBABSKQESEWKPKGXNVGTZHIFVWLCAQDHOKIGZZRV\"\n\ntxt = \"\"\nfor fn in (\"alice.txt\",\"dracula.txt\",\"pride.txt\",\"treasure.txt\"):\n    txt += open(fn, encoding='utf-8', errors='ignore').read().upper()\ntxt = ''.join(c for c in txt if 'A' <= c <= 'Z')\nbi = Counter(txt[i:i+2] for i in range(len(txt)-1))\ntot = sum(bi.values())\ndef blg(s): return math.log10((bi.get(s,0)+0.1)/tot)\ndef score(s): return sum(blg(s[i:i+2]) for i in range(len(s)-1))\n\ndef decrypt(ct, key, mode):\n    n=len(key); out=[]\n    for i,c in enumerate(ct):\n        k = ord(key[i%n])-65\n        x = ord(c)-65\n        if mode=='vig': p=(x-k)%26\n        elif mode=='beau': p=(k-x)%26\n        else: p=(x+k)%26\n        out.append(chr(65+p))\n    return ''.join(out)\n\ndef hillclimb_key(ct, L, mode, restarts=4, seed=1):\n    rnd = random.Random(seed*1000+L)\n    bestall = None\n    for r in range(restarts):\n        key = [rnd.randrange(26) for _ in range(L)]\n        def sc(key):\n            return score(decrypt(ct, ''.join(chr(65+x) for x in key), mode))\n        cur = sc(key)\n        improved = True\n        while improved:\n            improved = False\n            for i in range(L):\n                orig = key[i]\n                for v in range(26):\n                    if v==orig: continue\n                    key[i]=v\n                    s = sc(key)\n                    if s > cur: cur, orig = s, v; improved=True\n                key[i]=orig\n        if bestall is None or cur > bestall[0]:\n            bestall = (cur, ''.join(chr(65+x) for x in key))\n    return bestall\n\ndef transforms(ct):\n    yield \"id\", ct\n    yield \"rev\", ct[::-1]\n    out=[]\n    for i in range(0,len(ct),3):\n        out.append(ct[i:i+3][::-1])\n    yield \"trio-mirror\", ''.join(out)\n    streams = [ct[i::3][::-1] for i in range(3)]\n    for perm in ((0,1,2),(2,1,0),(1,0,2),(0,2,1),(1,2,0),(2,0,1)):\n        streams2=[streams[p] for p in perm]\n        res=[]\n        idxs=[0]*3\n        order=[]\n        k=0\n        while any(idxs[j] < len(streams2[j]) for j in range(3)):\n            j = k % 3\n            if idxs[j] < len(streams2[j]):\n                order.append(streams2[j][idxs[j]]); idxs[j]+=1\n            k+=1\n        yield f\"streams-rev-{perm}\", ''.join(order)\n    cols = [ct[i::3] for i in range(3)]\n    yield \"col3-down\", ''.join(''.join(c) for c in cols)\n    yield \"col3-down-revcol\", ''.join(''.join(c[::-1]) for c in cols)\n\nresults=[]\nfor tname, tct in transforms(CT):\n    for mode in (\"vig\",\"beau\",\"vigenere-add\"):\n        for L in range(1,13):\n            s, key = hillclimb_key(tct, L, mode, restarts=4, seed=hash(tname)%97+1)\n            p = decrypt(tct, key, mode)\n            results.append((s/len(p), tname, mode, L, key, p))\nresults.sort(reverse=True)\nfor row in results[:15]:\n    s,tname,mode,L,key,p = row\n    print(f\"{s:7.4f} {tname:16s} {mode:13s} L={L:2d} key={key} {p[:60]}\")\n"}
+[21] run_command cd /home/ctfplayer/workspace && timeout 280 python3 vigsolve.py 2>&1 | tail -20
+[22] create_file {"path": "/home/ctfplayer/workspace/lag.py", "content": "import math, re\nfrom collections import Counter\n\nCT = \"SALKMSKXZYRZEJFEOTMBRRZBRXYCXPNJIIWDRYADAIWKKKBEBUDDGNCXTUUBSJXMQVIVPVBYQEVVRBXMTEFGHRVULFEJZZUTXZIVBABSKQESEWKPKGXNVGTZHIFVWLCAQDHOKIGZZRV\"\nn = len(CT)\n\n# kappa test: matches at lag d\nprint(\"=== kappa by lag ===\")\nfor d in range(1, 70):\n    m = sum(1 for i in range(n-d) if CT[i]==CT[i+d])\n    print(d, m, round(m/(n-d),3))\n\n# expected IC under different cipher families, simulated\ntxt = \"\"\nfor fn in (\"alice.txt\",\"dracula.txt\",\"pride.txt\",\"treasure.txt\"):\n    txt += open(fn, encoding='utf-8', errors='ignore').read().upper()\ntxt = ''.join(c for c in txt if 'A' <= c <= 'Z')\npt = txt[10000:10139]\n\ndef IC(s):\n    c = Counter(s); N=len(s)\n    return sum(v*(v-1) for v in c.values())/(N*(N-1)) if N>1 else 0\n\nimport random\nrnd = random.Random(7)\ndef vig(ct, key):\n    return ''.join(chr(65+(ord(a)-65+ord(key[i%len(key)])-65)%26) for i,a in enumerate(ct))\n\nprint(\"\\n=== expected IC: plaintext\", round(IC(pt),4))\nfor L in (1,3,5,7,9,12,16,20,30):\n    vals=[IC(vig(pt, ''.join(rnd.choice(\"ABCDEFGHIJKLMNOPQRSTUVWXYZ\") for _ in range(L)))) for _ in range(30)]\n    print(f\"random key L={L}: IC~{sum(vals)/30:.4f}\")\n# running key = english\nrk = txt[20000:20139]\nprint(\"running key english:\", round(IC(vig(pt, rk)),4))\n# autokey (plaintext)\ndef autokey_enc(pt, primer):\n    ks = [ord(c)-65 for c in primer] + [ord(c)-65 for c in pt]\n    return ''.join(chr(65+((ord(p)-65+ks[i])%26)) for i,p in enumerate(pt))\nvals=[IC(autokey_enc(pt, ''.join(rnd.choice(\"ABCDEFGHIJKLMNOPQRSTUVWXYZ\") for _ in range(5)))) for _ in range(30)]\nprint(\"autokey primer5: IC~\", round(sum(vals)/30,4))\n# beaufort running key\nprint(\"beau running key:\", round(IC(''.join(chr(65+(ord(a)-65-(ord(b)-65))%26) for a,b in zip(pt,rk))),4))\n# homophonic-ish: random substitution 1:1\nperm = list(\"ABCDEFGHIJKLMNOPQRSTUVWXYZ\"); rnd.shuffle(perm)\nprint(\"monoalphabetic:\", round(IC(''.join(perm[ord(c)-65] for c in pt)),4))\n# playfair-ish? skip\nprint(\"\\nobserved IC:\", round(IC(CT),4))\n# letter frequencies of ct vs english\nc=Counter(CT)\nprint(\"ct freq:\", sorted(c.values(), reverse=True))\nc2=Counter(pt)\nprint(\"en freq:\", sorted(c2.values(), reverse=True))\n"}
+peer findings: 1 new
+[23] run_command cd /home/ctfplayer/workspace && timeout 120 python3 lag.py 2>&1 | head -80
+[24] run_command cd /home/ctfplayer/workspace && timeout 120 python3 lag.py 2>&1 | tail -12
+[25] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+CT = "SALKMSKXZYRZEJFEOTMBRRZBRXYCXPNJIIWDRYADAIWKKKBEBUDDGNCXTUUBSJXMQVIVPVBYQEVVRBXMTEFGHRVULFEJZZUTXZIVBABSKQESEWKPKGXNVGTZHIFVWLCAQDHOKIGZZRV"
+def d(ct,key,mode):
+    out=[]
+    for i,c in enumerate(ct):
+        x=ord(c)-65; k=ord(key[i%len(key)])-65
+        p={'vig':(x-k),'beau':(k-x),'add':(x+k)}[mode]%26
+        out.append(chr(65+p))
+    return ''.join(out)
+KEYS=["TAKEREGISTRYTHEGROUP","REGISTRYTHEGROUP","TAKE","REGISTRY","GROUP",
+"AKEYDIVIDED","BRAILLEOPENSTHEOLDREGISTRY","BRAILLEOPENSTHEOLDREGIS","KEYDIVIDED",
+"THEREGISTRY","THEOLDREGISTRY","OLDREGISTRY","TAKEREGISTRY"]
+for k in KEYS:
+    for m in ("vig","beau","add"):
+        p=d(CT,k,m)
+        print(f"{k:26s} {m:4s} {p[:70]}")
+EOF
+[26] run_command cd /home/ctfplayer/workspace && curl -s "http://taking-on-the-temple.chal.csaw.io:5000/stone" -o stone2.html && diff <(cat stone.html) <(cat stone2.html) && echo SAME; python3 - <<'EOF'
+import re
+h = open('stone2.html', encoding='utf-8').read()
+m = re.search(r'Braille: ([^<]+)', h)
+br = m.group(1).strip()
+print(repr(br))
+print("codepoints:", [hex(ord(c)) for c in br])
+EOF
+[27] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+codes = {'a':0x01,'b':0x03,'c':0x09,'d':0x19,'e':0x11,'f':0x0b,'g':0x1b,'h':0x13,'i':0x0a,'j':0x1a,
+'k':0x05,'l':0x07,'m':0x0d,'n':0x1d,'o':0x15,'p':0x0f,'q':0x1f,'r':0x17,'s':0x0e,'t':0x1e,
+'u':0x25,'v':0x27,'w':0x3a,'x':0x2d,'y':0x3d,'z':0x35}
+inv={v:k for k,v in codes.items()}
+cells = [0x280e,0x281e,0x2815,0x281d,0x2811,0x2817,0x2811,0x280d,0x2811,0x280d,0x2803,0x2811,0x2817,0x281e,0x2813,0x2811,0x2807,0x2815,0x2809,0x2805]
+for c in cells:
+    v = c-0x2800
+    print(hex(c), bin(v)[2:].zfill(6), inv.get(v,'?'))
+EOF
+[28] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import math
+from collections import Counter
+CT = "SALKMSKXZYRZEJFEOTMBRRZBRXYCXPNJIIWDRYADAIWKKKBEBUDDGNCXTUUBSJXMQVIVPVBYQEVVRBXMTEFGHRVULFEJZZUTXZIVBABSKQESEWKPKGXNVGTZHIFVWLCAQDHOKIGZZRV"
+txt = ""
+for fn in ("alice.txt","dracula.txt","pride.txt","treasure.txt"):
+    txt += open(fn, encoding='utf-8', errors='ignore').read().upper()
+txt = ''.join(c for c in txt if 'A' <= c <= 'Z')
+bi = Counter(txt[i:i+2] for i in range(len(txt)-1)); tot=sum(bi.values())
+def sc(s): return sum(math.log10((bi.get(s[i:i+2],0)+0.1)/tot) for i in range(len(s)-1))/(len(s)-1)
+def d(ct,key,mode):
+    out=[]
+    for i,c in enumerate(ct):
+        x=ord(c)-65; k=ord(key[i%len(key)])-65
+        p={'vig':(x-k),'beau':(k-x),'add':(x+k)}[mode]%26
+        out.append(chr(65+p))
+    return ''.join(out)
+phrases=["STONEREMEMBERTHELOCK","REMEMBERTHELOCK","STONEREMEMBER","THELOCK","STONE","LOCK",
+"STONETHELOCK","REMEMBER","STONEREMEMBERTHELOCK"+"STONEREMEMBERTHELOCK"]
+rows=[]
+for k in phrases:
+    for m in ("vig","beau","add"):
+        p=d(CT,k,m); rows.append((sc(p),k,m,p))
+rows.sort(reverse=True)
+for s,k,m,p in rows[:10]:
+    print(f"{s:7.4f} {k:22s} {m:4s} {p[:72]}")
+EOF
+[29] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import hashlib, base64, itertools
+CT = "SALKMSKXZYRZEJFEOTMBRRZBRXYCXPNJIIWDRYADAIWKKKBEBUDDGNCXTUUBSJXMQVIVPVBYQEVVRBXMTEFGHRVULFEJZZUTXZIVBABSKQESEWKPKGXNVGTZHIFVWLCAQDHOKIGZZRV"
+target = "7f1a0d"
+cands = [CT, CT.lower(), "041971", "04/19/71", "LOCK041971", "LOCK / 04 / 19 / 71", "1971",
+"CHECKSUM_FAIL_NOT_KEY", "STONEREMEMBERTHELOCK", "stone remember the lock",
+"STAKE REGISTRY THE GROUP", "SSTDE REMEMBER THE LOCK", "STONE REMEMBER THE LOCK",
+"GRANITE", "MIDNIGHT VAULT", "TAKE REGISTRY THE GROUP", "What is remembered is never written only once"]
+def h(s):
+    b = s.encode()
+    return {"md5":hashlib.md5(b).hexdigest(), "sha1":hashlib.sha1(b).hexdigest(),
+            "sha256":hashlib.sha256(b).hexdigest()}
+for c in cands:
+    r = h(c)
+    for alg,v in r.items():
+        if v.startswith(target):
+            print("MATCH", alg, repr(c), v)
+# also try common checksum styles: sum-based
+for name, s in (("ct",CT),):
+    print(name, "sum%0x6"%sum(s.encode()), "sum mod", sum(ord(c) for c in s))
+# brute-force 6 digit combos for md5 prefix
+import hashlib
+found=[]
+for n in range(1000000):
+    s = f"{n:06d}"
+    if hashlib.md5(s.encode()).hexdigest().startswith(target):
+        found.append(s); break
+print("6-digit md5 prefix match:", found)
+found=[]
+for n in range(1000000):
+    s = f"{n:06d}"
+    if hashlib.sha1(s.encode()).hexdigest().startswith(target):
+        found.append(s); break
+print("6-digit sha1 prefix match:", found)
+EOF
+[30] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import math, re
+from collections import Counter
+CT = "SALKMSKXZYRZEJFEOTMBRRZBRXYCXPNJIIWDRYADAIWKKKBEBUDDGNCXTUUBSJXMQVIVPVBYQEVVRBXMTEFGHRVULFEJZZUTXZIVBABSKQESEWKPKGXNVGTZHIFVWLCAQDHOKIGZZRV"
+ins = "WHATISREMEMBEREDISNEVERWRITTENONLYONCETHELINEWASCOPIEDINMIRROREDTRIOS"
+brk = "STONEREMEMBERTHELOCK"
+def trios_mirror(s):
+    out=[]
+    for i in range(0,len(s),3):
+        out.append(s[i:i+3][::-1])
+    return ''.join(out)
+def streams_rev(s):
+    ss=[s[i::3][::-1] for i in range(3)]
+    out=[]
+    idx=[0,0,0]; k=0
+    while any(idx[j]<len(ss[j]) for j in range(3)):
+        j=k%3
+        if idx[j]<len(ss[j]): out.append(ss[j][idx[j]]); idx[j]+=1
+        k+=1
+    return ''.join(out)
+txt = ""
+for fn in ("alice.txt","dracula.txt","pride.txt","treasure.txt"):
+    txt += open(fn, encoding='utf-8', errors='ignore').read().upper()
+txt = ''.join(c for c in txt if 'A' <= c <= 'Z')
+bi = Counter(txt[i:i+2] for i in range(len(txt)-1)); tot=sum(bi.values())
+def sc(s): return sum(math.log10((bi.get(s[i:i+2],0)+0.1)/tot) for i in range(len(s)-1))/(len(s)-1)
+def d(ct,key,mode):
+    return ''.join(chr(65+({'vig':(ord(c)-65-(ord(key[i%len(key)])-65)),'beau':((ord(key[i%len(key)])-65)-(ord(c)-65)),'add':((ord(c)-65)+(ord(key[i%len(key)])-65))}[mode])%26) for i,c in enumerate(ct))
+keys = {
+ "ins":ins, "ins_rev":ins[::-1], "ins_trio_mirror":trios_mirror(ins), "ins_streams_rev":streams_rev(ins),
+ "brk":brk, "brk_rev":brk[::-1], "brk_trio":trios_mirror(brk),
+}
+rows=[]
+for name,k in keys.items():
+    for m in ("vig","beau","add"):
+        p = d(CT,k,m)
+        rows.append((sc(p),name,m,p))
+rows.sort(reverse=True)
+for s,name,m,p in rows[:12]:
+    print(f"{s:7.4f} {name:18s} {m:4s} {p[:70]}")
+EOF
+[31] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import math, zlib, hashlib
+from collections import Counter
+CT = "SALKMSKXZYRZEJFEOTMBRRZBRXYCXPNJIIWDRYADAIWKKKBEBUDDGNCXTUUBSJXMQVIVPVBYQEVVRBXMTEFGHRVULFEJZZUTXZIVBABSKQESEWKPKGXNVGTZHIFVWLCAQDHOKIGZZRV"
+txt = ""
+for fn in ("alice.txt","dracula.txt","pride.txt","treasure.txt"):
+    txt += open(fn, encoding='utf-8', errors='ignore').read().upper()
+txt = ''.join(c for c in txt if 'A' <= c <= 'Z')
+bi = Counter(txt[i:i+2] for i in range(len(txt)-1)); tot=sum(bi.values())
+def sc(s): return sum(math.log10((bi.get(s[i:i+2],0)+0.1)/tot) for i in range(len(s)-1))/(len(s)-1)
+
+rows=[]
+# progressive key: p_i = c_i - (a + s*i)
+for a in range(26):
+    for s in range(26):
+        p=''.join(chr(65+(ord(c)-65-(a+s*i))%26) for i,c in enumerate(CT))
+        rows.append((sc(p), f"prog a={a} s={s}", p))
+# numeric keys from LOCK / 04 / 19 / 71
+for name, digits in (("041971","041971"),("04197","04197"),("41971","41971"),("1971","1971"),
+                     ("0419","0419"),("71","71"),("04","04"),("19","19"),
+                     ("041971x2","041971041971"),("LOCK041971","LOCK041971")):
+    for m in ("vig","beau","add"):
+        out=[]
+        for i,c in enumerate(CT):
+            x=ord(c)-65; k=int(digits[i%len(digits)])
+            p={'vig':x-k,'beau':k-x,'add':x+k}[m]%26
+            out.append(chr(65+p))
+        p=''.join(out)
+        rows.append((sc(p), f"num:{name}:{m}", p))
+rows.sort(reverse=True)
+for s,n,p in rows[:12]:
+    print(f"{s:7.4f} {n:18s} {p[:70]}")
+
+# checksum attempts: crc32/adler on various
+cands = [CT, CT.lower(), "041971", "LOCK / 04 / 19 / 71", "SAL", "STONE REMEMBER THE LOCK",
+"stone remember the lock", "CHECKSUM_FAIL_NOT_KEY"]
+for c in cands:
+    b=c.encode()
+    print(repr(c[:30]), "crc32=%08x adler=%08x md5=%s sha256=%s" % (zlib.crc32(b), zlib.adler32(b), hashlib.md5(b).hexdigest()[:6], hashlib.sha256(b).hexdigest()[:6]))
+EOF
+[32] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import math, zlib, hashlib
+from collections import Counter
+CT = "SALKMSKXZYRZEJFEOTMBRRZBRXYCXPNJIIWDRYADAIWKKKBEBUDDGNCXTUUBSJXMQVIVPVBYQEVVRBXMTEFGHRVULFEJZZUTXZIVBABSKQESEWKPKGXNVGTZHIFVWLCAQDHOKIGZZRV"
+txt = ""
+for fn in ("alice.txt","dracula.txt","pride.txt","treasure.txt"):
+    txt += open(fn, encoding='utf-8', errors='ignore').read().upper()
+txt = ''.join(c for c in txt if 'A' <= c <= 'Z')
+bi = Counter(txt[i:i+2] for i in range(len(txt)-1)); tot=sum(bi.values())
+def sc(s): return sum(math.log10((bi.get(s[i:i+2],0)+0.1)/tot) for i in range(len(s)-1))/(len(s)-1)
+rows=[]
+for a in range(26):
+    for s in range(26):
+        p=''.join(chr(65+(ord(c)-65-(a+s*i))%26) for i,c in enumerate(CT))
+        rows.append((sc(p), f"prog a={a} s={s}", p))
+for name, digits in (("041971",["0","4","1","9","7","1"]),("4197",["4","1","9","7"]),
+                     ("1971",["1","9","7","1"]),("0419",["0","4","1","9"]),("1971x2",["1","9","7","1"]*2)):
+    for m in ("vig","beau","add"):
+        out=[]
+        for i,c in enumerate(CT):
+            x=ord(c)-65; k=int(digits[i%len(digits)])
+            p={'vig':x-k,'beau':k-x,'add':x+k}[m]%26
+            out.append(chr(65+p))
+        p=''.join(out)
+        rows.append((sc(p), f"num:{name}:{m}", p))
+rows.sort(reverse=True)
+for s,n,p in rows[:12]:
+    print(f"{s:7.4f} {n:18s} {p[:70]}")
+cands = [CT, CT.lower(), "041971", "LOCK / 04 / 19 / 71", "SAL", "STONE REMEMBER THE LOCK",
+"stone remember the lock", "CHECKSUM_FAIL_NOT_KEY", "GRANITE"]
+for c in cands:
+    b=c.encode()
+    print(repr(c[:28]), "crc32=%08x adler=%08x md5=%s sha1=%s sha256=%s" % (zlib.crc32(b), zlib.adler32(b), hashlib.md5(b).hexdigest()[:6], hashlib.sha1(b).hexdigest()[:6], hashlib.sha256(b).hexdigest()[:6]))
+EOF
+[33] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import math
+from collections import Counter
+CT = "SALKMSKXZYRZEJFEOTMBRRZBRXYCXPNJIIWDRYADAIWKKKBEBUDDGNCXTUUBSJXMQVIVPVBYQEVVRBXMTEFGHRVULFEJZZUTXZIVBABSKQESEWKPKGXNVGTZHIFVWLCAQDHOKIGZZRV"
+txt = ""
+for fn in ("alice.txt","dracula.txt","pride.txt","treasure.txt"):
+    txt += open(fn, encoding='utf-8', errors='ignore').read().upper()
+txt = ''.join(c for c in txt if 'A' <= c <= 'Z')
+bi = Counter(txt[i:i+2] for i in range(len(txt)-1)); tot=sum(bi.values())
+def sc(s): return sum(math.log10((bi.get(s[i:i+2],0)+0.1)/tot) for i in range(len(s)-1))/(len(s)-1)
+def d(ct,key,mode):
+    return ''.join(chr(65+({'vig':(ord(c)-65-(ord(key[i%len(key)])-65)),'beau':((ord(key[i%len(key)])-65)-(ord(c)-65)),'add':((ord(c)-65)+(ord(key[i%len(key)])-65))}[mode])%26) for i,c in enumerate(ct))
+keys = {
+ "CHECKSUMFAILNOTKEY":"CHECKSUMFAILNOTKEY",
+ "checksumfailnotkey_lower":"checksumfailnotkey",
+ "hexmod26_XAN":"XAN",
+ "hexvals":[7,15,1,10,0,13],
+ "7f1a0d_str":"7F1A0D",
+ "NOTKEY":"NOTKEY","CHECKSUM":"CHECKSUM","FAIL":"FAIL",
+ "GRANITEFROSTIRON":"GRANITEFROSTIRON",
+}
+rows=[]
+for name,k in keys.items():
+    if isinstance(k,list):
+        for m in ("vig","beau","add"):
+            out=[]
+            for i,c in enumerate(CT):
+                x=ord(c)-65; kk=k[i%len(k)]
+                p={'vig':x-kk,'beau':kk-x,'add':x+kk}[m]%26
+                out.append(chr(65+p))
+            p=''.join(out); rows.append((sc(p),name+" "+m,p))
+    else:
+        for m in ("vig","beau","add"):
+            p=d(CT,k,m); rows.append((sc(p),name+" "+m,p))
+rows.sort(reverse=True)
+for s,n,p in rows:
+    print(f"{s:7.4f} {n:28s} {p[:66]}")
+EOF
+[34] create_file {"path": "/home/ctfplayer/workspace/fid.py", "content": "import math, pickle, os\nfrom collections import Counter\n\nCT = \"SALKMSKXZYRZEJFEOTMBRRZBRXYCXPNJIIWDRYADAIWKKKBEBUDDGNCXTUUBSJXMQVIVPVBYQEVVRBXMTEFGHRVULFEJZZUTXZIVBABSKQESEWKPKGXNVGTZHIFVWLCAQDHOKIGZZRV\"\n_dir = os.path.dirname(os.path.abspath(__file__))\nwith open(os.path.join(_dir,'quads.pkl'),'rb') as f: QUAD = pickle.load(f)\nTOT = sum(QUAD.values())\ndef quad_score(s):\n    if len(s) < 4: return -99\n    return sum(math.log10((QUAD.get(s[i:i+4],0)+0.01)/TOT) for i in range(len(s)-3))/(len(s)-3)\n\nSQ = \"ABCDEFGHIKLMNOPQRSTUVWXYZ\"  # 5x5, J->I\ndef bifid_dec(ct, period):\n    coords = {}\n    for i,ch in enumerate(SQ): coords[ch]=(i//5,i%5)\n    def to_pairs(s):\n        out=[]\n        for c in s:\n            c = 'I' if c=='J' else c\n            out.append(coords.get(c))\n        return out\n    P = to_pairs(ct)\n    n = len(ct)\n    out=[]\n    for start in range(0, n, period):\n        block = P[start:start+period]\n        rows = [r for r,_ in block]\n        cols = [c for _,c in block]\n        flat = rows+cols\n        for k in range(0, len(flat)-1, 2):\n            out.append(SQ[flat[k]*5+flat[k+1]])\n    return ''.join(out)\n\nprint(\"=== BIFID (standard square) ===\")\nres=[]\nfor period in list(range(2,25)) + [n if (n:=len(CT)) else 0]:\n    p = bifid_dec(CT, period)\n    res.append((quad_score(p), period, p))\nres.sort(reverse=True)\nfor s,per,p in res[:6]:\n    print(f\"{s:7.4f} period={per:3d} {p[:60]}\")\n\nprint(\"=== TRIFID (3x3x3, 27 = A-Z + '#') ===\")\nT3 = \"ABCDEFGHIJKLMNOPQRSTUVWXYZ#\"\ndef trifid_dec(ct, period):\n    coords = {}\n    for i,ch in enumerate(T3):\n        coords[ch] = (i//9, (i%9)//3, i%3)\n    n=len(ct); out=[]\n    C=[('I' if c=='J' else c) for c in ct]\n    P=[coords.get(c) for c in C]\n    for start in range(0,n,period):\n        block=P[start:start+period]\n        f=[v for tup in block for v in tup]\n        for k in range(0,len(f)-2,3):\n            a,b,c = f[k],f[k+1],f[k+2]\n            idx = a*9+b*3+c\n            out.append(T3[idx])\n    return ''.join(out)\nres=[]\nfor period in list(range(2,25)) + [len(CT)]:\n    p = trifid_dec(CT, period)\n    res.append((quad_score(p), period, p))\nres.sort(reverse=True)\nfor s,per,p in res[:6]:\n    print(f\"{s:7.4f} period={per:3d} {p[:60]}\")\n\nprint(\"=== PLAYFAIR (standard square) ===\")\ndef playfair_dec(ct, sq):\n    pos = {ch:i for i,ch in enumerate(sq)}\n    out=[]\n    s = ct.replace('J','I')\n    i=0\n    while i < len(s):\n        a,b = s[i], s[i+1] if i+1<len(s) else 'X'\n        ra,ca = divmod(pos[a],5); rb,cb = divmod(pos[b],5)\n        if ra==rb:\n            out.append(sq[ra*5+(ca-1)%5]); out.append(sq[rb*5+(cb-1)%5])\n        elif ca==cb:\n            out.append(sq[((ra-1)%5)*5+ca]); out.append(sq[((rb-1)%5)*5+cb])\n        else:\n            out.append(sq[ra*5+cb]); out.append(sq[rb*5+ca])\n        i+=2\n    return ''.join(out)\np = playfair_dec(CT, SQ)\nprint(f\"{quad_score(p):7.4f} {p[:60]}\")\n\nprint(\"=== columnar transposition sanity (should not fit flat IC) ===\")\n"}
+[35] run_command cd /home/ctfplayer/workspace && timeout 250 python3 fid.py
+[36] create_file {"path": "/home/ctfplayer/workspace/bifid_hc.py", "content": "import math, pickle, os, random\n_dir = os.path.dirname(os.path.abspath(__file__))\nwith open(os.path.join(_dir,'quads.pkl'),'rb') as f: QUAD = pickle.load(f)\nTOT = sum(QUAD.values())\ndef score(s):\n    return sum(math.log10((QUAD.get(s[i:i+4],0)+0.01)/TOT) for i in range(len(s)-3))/(len(s)-3)\n\nCT = \"SALKMSKXZYRZEJFEOTMBRRZBRXYCXPNJIIWDRYADAIWKKKBEBUDDGNCXTUUBSJXMQVIVPVBYQEVVRBXMTEFGHRVULFEJZZUTXZIVBABSKQESEWKPKGXNVGTZHIFVWLCAQDHOKIGZZRV\"\nN = len(CT)\n\ndef bifid_dec(ct, sq, period):\n    pos = {ch:i for i,ch in enumerate(sq)}\n    out=[]\n    rows=[]; cols=[]\n    for c in ct:\n        r,cn = divmod(pos[c],5)\n        rows.append(r); cols.append(cn)\n    flat = rows+cols\n    for start in range(0, N, period):\n        blk = flat[2*start:2*start+2*period]\n        for k in range(0, len(blk)-1, 2):\n            out.append(sq[blk[k]*5+blk[k+1]])\n    return ''.join(out)\n\ndef solve_period(period, restarts=14, seed0=0):\n    rnd = random.Random(seed0*97+period)\n    results=[]\n    for r in range(restarts):\n        sq = list(\"ABCDEFGHIKLMNOPQRSTUVWXYZ\")\n        rnd.shuffle(sq); sq=''.join(sq)\n        cur = score(bifid_dec(CT, sq, period))\n        improved=True\n        while improved:\n            improved=False\n            best=None\n            for i in range(25):\n                for j in range(i+1,25):\n                    s2 = list(sq); s2[i],s2[j] = s2[j],s2[i]\n                    sc = score(bifid_dec(CT, ''.join(s2), period))\n                    if sc > cur+1e-9:\n                        cur = sc; best=''.join(s2); improved=True\n                        break\n            if best: sq = best\n        results.append((cur, sq, bifid_dec(CT, sq, period)))\n    results.sort(reverse=True)\n    return results[0]\n\nallres=[]\nfor period in range(2,26):\n    s, sq, p = solve_period(period, restarts=14, seed0=1)\n    allres.append((s, period, sq, p))\n    print(f\"period={period:3d} score={s:7.4f} {p[:58]}\")\nallres.sort(reverse=True)\nprint(\"\\nBEST:\", allres[0][:2], allres[0][3])\n"}
+[37] run_command cd /home/ctfplayer/workspace && timeout 280 python3 bifid_hc.py 2>&1 | tail -30
+[38] run_command cd /home/ctfplayer/workspace && sed -i 's/for c in ct:/for c in ct.replace("J","I"):/; s/sq = list("ABCDEFGHIKLMNOPQRSTUVWXYZ")/sq = list("ABCDEFGHIKLMNOPQRSTUVWXYZ")/' bifid_hc.py && timeout 280 python3 bifid_hc.py 2>&1 | tail -30
+[39] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import math, pickle, os, random
+from collections import Counter
+txt = ""
+for fn in ("alice.txt","dracula.txt","pride.txt","treasure.txt"):
+    txt += open(fn, encoding='utf-8', errors='ignore').read().upper()
+txt = ''.join(c for c in txt if 'A' <= c <= 'Z')
+bi = Counter(txt[i:i+2] for i in range(len(txt)-1)); tot=sum(bi.values())
+def bs(s): return sum(math.log10((bi.get(s[i:i+2],0)+0.1)/tot) for i in range(len(s)-1))/(len(s)-1)
+with open('quads.pkl','rb') as f: QUAD=pickle.load(f)
+TOTQ=sum(QUAD.values())
+def qs(s): return sum(math.log10((QUAD.get(s[i:i+4],0)+0.01)/TOTQ) for i in range(len(s)-3))/(len(s)-3)
+rnd=random.Random(3)
+bvals=[]; qvals=[]
+for _ in range(200):
+    i=rnd.randrange(0,len(txt)-139)
+    seg=txt[i:i+139]
+    bvals.append(bs(seg)); qvals.append(qs(seg))
+import statistics
+print("english bigram score: mean %.3f  min %.3f  max %.3f" % (statistics.mean(bvals), min(bvals), max(bvals)))
+print("english quad   score: mean %.3f  min %.3f  max %.3f" % (statistics.mean(qvals), min(qvals), max(qvals)))
+# random letters
+import string
+rv=[]
+for _ in range(50):
+    s=''.join(rnd.choice(string.ascii_uppercase) for _ in range(139))
+    rv.append(bs(s))
+print("random bigram score: mean %.3f" % statistics.mean(rv))
+EOF
+peer findings: 1 new
+[40] run_command cd /home/ctfplayer/workspace && for p in registry regis oldregistry vault door seal wake; do echo "== /$p"; curl -s -i "http://taking-on-the-temple.chal.csaw.io:5000/$p" | head -30; echo; done
+[40] publish_insight {"text": "Calibration fact for /stone ciphertext (139 letters, IC=0.0386=flat): real English excerpts of this length score bigram-normalized \u2248 \u22122.35 (min \u22122.70), random letters \u2248 \u22124.01. Everything decoded so far (affine/caesar/ vig-beaufort-add with keys STONE REMEMBER THE LOCK / REGISTRY / inscription / braille / hex checksum / 041971, autokey chain m\u226416, bifid/trifid/playfair all periods, transpositions) scored \u22123.3 to \u22124.0 \u21d2 NONE is English. Stone braille cells decode as \"STONE REMEMBER THE LOCK\" (\u2820 = capital sign). Do not trust partial-word scores; check \u2265 \u22122.7."}
+[41] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import math
+from collections import Counter
+CT = "SALKMSKXZYRZEJFEOTMBRRZBRXYCXPNJIIWDRYADAIWKKKBEBUDDGNCXTUUBSJXMQVIVPVBYQEVVRBXMTEFGHRVULFEJZZUTXZIVBABSKQESEWKPKGXNVGTZHIFVWLCAQDHOKIGZZRV"
+C=[ord(c)-65 for c in CT]
+txt = ""
+for fn in ("alice.txt","dracula.txt","pride.txt","treasure.txt"):
+    txt += open(fn, encoding='utf-8', errors='ignore').read().upper()
+txt = ''.join(c for c in txt if 'A' <= c <= 'Z')
+bi = Counter(txt[i:i+2] for i in range(len(txt)-1)); tot=sum(bi.values())
+def sc(s): return sum(math.log10((bi.get(s[i:i+2],0)+0.1)/tot) for i in range(len(s)-1))/(len(s)-1)
+best=[]
+for m in range(1,30):
+    for sign in (1,-1):
+        for src in ("cipher","plain"):
+            p=[]
+            if src=="cipher":
+                for i in range(len(CT)):
+                    k = C[i-m] if i>=m else 0
+                    p.append((C[i]+sign*k)%26)
+            else:
+                # plain-autokey p_i = c_i -/+ p_{i-m}, assume primer=0 for i<m
+                P=[0]*len(CT)
+                for i in range(len(CT)):
+                    k = P[i-m] if i>=m else 0
+                    P[i]=(C[i]+sign*k)%26
+                p=P
+            s=''.join(chr(65+x) for x in p)
+            best.append((sc(s), m, sign, src, s))
+best.sort(reverse=True)
+for s,m,sign,src,out in best[:8]:
+    print(f"{s:7.4f} m={m:2d} sign={sign:+d} {src:6s} {out[:70]}")
+EOF
+[42] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import math
+from collections import Counter
+CT = "SALKMSKXZYRZEJFEOTMBRRZBRXYCXPNJIIWDRYADAIWKKKBEBUDDGNCXTUUBSJXMQVIVPVBYQEVVRBXMTEFGHRVULFEJZZUTXZIVBABSKQESEWKPKGXNVGTZHIFVWLCAQDHOKIGZZRV"
+txt = ""
+for fn in ("alice.txt","dracula.txt","pride.txt","treasure.txt"):
+    txt += open(fn, encoding='utf-8', errors='ignore').read().upper()
+txt = ''.join(c for c in txt if 'A' <= c <= 'Z')
+bi = Counter(txt[i:i+2] for i in range(len(txt)-1)); tot=sum(bi.values())
+def sc(s): return sum(math.log10((bi.get(s[i:i+2],0)+0.1)/tot) for i in range(len(s)-1))/(len(s)-1)
+def d(ct,key,mode):
+    return ''.join(chr(65+({'vig':(ord(c)-65-(ord(key[i%len(key)])-65)),'beau':((ord(key[i%len(key)])-65)-(ord(c)-65)),'add':((ord(c)-65)+(ord(key[i%len(key)])-65))}[mode])%26) for i,c in enumerate(ct))
+keys=["APRIL1971","APRIL","APR1971","APR","1971","041971","APR19","APRIL1971C","LOCKAPRIL1971",
+"APRIL1971"[::-1],"DTSS","DTS","ETSA","APRIL1971APRIL","041971041971".upper()]
+rows=[]
+for k in keys:
+    for m in ("vig","beau","add"):
+        p=d(CT,k,m); rows.append((sc(p),k,m,p))
+rows.sort(reverse=True)
+for s,k,m,p in rows[:10]:
+    print(f"{s:7.4f} {k:12s} {m:4s} {p[:68]}")
+EOF
+peer findings: 1 new
+[43] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import math
+from collections import Counter
+CT = "SALKMSKXZYRZEJFEOTMBRRZBRXYCXPNJIIWDRYADAIWKKKBEBUDDGNCXTUUBSJXMQVIVPVBYQEVVRBXMTEFGHRVULFEJZZUTXZIVBABSKQESEWKPKGXNVGTZHIFVWLCAQDHOKIGZZRV"
+txt = ""
+for fn in ("alice.txt","dracula.txt","pride.txt","treasure.txt"):
+    txt += open(fn, encoding='utf-8', errors='ignore').read().upper()
+txt = ''.join(c for c in txt if 'A' <= c <= 'Z')
+bi = Counter(txt[i:i+2] for i in range(len(txt)-1)); tot=sum(bi.values())
+def sc(s): return sum(math.log10((bi.get(s[i:i+2],0)+0.1)/tot) for i in range(len(s)-1))/(len(s)-1)
+def d(ct,key,mode):
+    return ''.join(chr(65+({'vig':(ord(c)-65-(ord(key[i%len(key)])-65)),'beau':((ord(key[i%len(key)])-65)-(ord(c)-65)),'add':((ord(c)-65)+(ord(key[i%len(key)])-65))}[mode])%26) for i,c in enumerate(ct))
+s31 = "THELINEWASCOPIEDINMIRROREDTRIOS"
+s38 = "WHATISREMEMBEREDISNEVERWRITTENONLYONCE"
+def triom(s):
+    return ''.join(s[i:i+3][::-1] for i in range(0,len(s),3))
+keys = {"s31":s31, "s31_rev":s31[::-1], "s31_triom":triom(s31),
+        "s38":s38, "s38_rev":s38[::-1], "s38_triom":triom(s38),
+        "full69":s38+s31, "full69_rev":(s38+s31)[::-1], "full69_triom":triom(s38+s31)}
+rows=[]
+for name,k in keys.items():
+    print(name, len(k))
+    for m in ("vig","beau","add"):
+        p=d(CT,k,m); rows.append((sc(p),name,m,p))
+rows.sort(reverse=True)
+for s,n,m,p in rows[:12]:
+    print(f"{s:7.4f} {n:12s} {m:4s} {p[:70]}")
+EOF
+[44] run_command cd /home/ctfplayer/workspace && for a in "STONE REMEMBER THE LOCK" "REMEMBER THE LOCK" "stone remember the lock" "STONEREMEMBERTHELOCK" "GRANITE" "granite" "CHECKSUM_FAIL_NOT_KEY" "WHAT IS REMEMBERED IS NEVER WRITTEN ONLY ONCE" "041971" "REGISTRY"; do
+echo "=== $a"; curl -s -X POST "http://taking-on-the-temple.chal.csaw.io:5000/stone" --data-urlencode "answer=$a" | grep -o 'class="[a-z]*">[^<]*' ; done
+[45] run_command cd /home/ctfplayer/workspace && curl -s -i -c jar.txt "http://taking-on-the-temple.chal.csaw.io:5000/inventory" | head -40; echo "=== inventory body:"; curl -s -b jar.txt "http://taking-on-the-temple.chal.csaw.io:5000/inventory"
+[47] create_file {"path": "/home/ctfplayer/workspace/hill34.py", "content": "import math, pickle, os, random, itertools\n_dir = os.path.dirname(os.path.abspath(__file__))\nwith open(os.path.join(_dir,'quads.pkl'),'rb') as f: QUAD = pickle.load(f)\nTOT = sum(QUAD.values())\ndef score(s):\n    return sum(math.log10((QUAD.get(s[i:i+4],0)+0.01)/TOT) for i in range(len(s)-3))/(len(s)-3)\n\nCT = \"SALKMSKXZYRZEJFEOTMBRRZBRXYCXPNJIIWDRYADAIWKKKBEBUDDGNCXTUUBSJXMQVIVPVBYQEVVRBXMTEFGHRVULFEJZZUTXZIVBABSKQESEWKPKGXNVGTZHIFVWLCAQDHOKIGZZRV\"\nN = len(CT)\nC = [ord(c)-65 for c in CT]\n\ndef matmul(K, vecs):\n    return [(K[0]*vecs[0]+K[1]*vecs[1]+K[2]*vecs[2])%26,\n            (K[3]*vecs[0]+K[4]*vecs[1]+K[5]*vecs[2])%26,\n            (K[6]*vecs[0]+K[7]*vecs[1]+K[8]*vecs[2])%26]\n\ndef det3(K):\n    return (K[0]*(K[4]*K[8]-K[5]*K[7]) - K[1]*(K[3]*K[8]-K[5]*K[6]) + K[2]*(K[3]*K[7]-K[4]*K[6])) % 26\n\ndef inv3(K):\n    d = det3(K)\n    for di in (1,3,5,7,9,11,15,17,21,25):\n        if (d*di)%26 == 1: break\n    else:\n        return None\n    inv_d = di\n    a,b,c,d_,e,f,g,h,i = K\n    # adjugate\n    adj = [(e*i-f*h)%26, (c*h-b*i)%26, (b*f-c*e)%26,\n           (f*g-d*i)%26, (a*i-c*g)%26, (c*d-a*f)%26,\n           (d*h-e*g)%26, (b*g-a*h)%26, (a*e-b*d)%26]\n    return [(x*inv_d)%26 for x in adj]\n\ndef dec_hill(K):\n    Ki = inv3(K)\n    if Ki is None: return None\n    out=[]\n    for s in range(0, N-2, 3):\n        P = matmul(Ki, C[s:s+3])\n        out.extend(P)\n    return ''.join(chr(65+x) for x in out)\n\nrnd = random.Random(11)\nbest = None\ntries = 0\nwhile tries < 40000:\n    tries += 1\n    K = [rnd.randrange(26) for _ in range(9)]\n    if det3(K) % 2 == 0 or det3(K) % 13 == 0: continue\n    p = dec_hill(K)\n    if p is None: continue\n    s = score(p)\n    # quick hillclimb on single entries\n    improved = True\n    while improved:\n        improved = False\n        for idx in range(9):\n            orig = K[idx]\n            for v in range(26):\n                if v == orig: continue\n                K[idx] = v\n                if det3(K)%2==0 or det3(K)%13==0:\n                    K[idx]=orig; continue\n                p2 = dec_hill(K)\n                s2 = score(p2)\n                if s2 > s:\n                    s = s2; orig = v; improved = True\n                else:\n                    K[idx] = orig\n            K[idx] = orig\n        if best is None or s > best[0]:\n            best = (s, list(K), p)\n            print(f\"[{tries}] score={s:.4f} K={K}\")\n            print(\"   \", p[:66])\nprint(\"BEST:\", best[0], best[1])\nprint(best[2])\n"}
+[48] run_command cd /home/ctfplayer/workspace && timeout 280 python3 hill34.py 2>&1 | tail -25
+[49] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+# patch: skip None
+src = open('hill34.py').read()
+src = src.replace("""                p2 = dec_hill(K)
+                s2 = score(p2)""", """                p2 = dec_hill(K)
+                if p2 is None:
+                    K[idx]=orig; continue
+                s2 = score(p2)""")
+open('hill34.py','w').write(src)
+print("patched")
+EOF
+timeout 280 python3 hill34.py 2>&1 | tail -25
+[50] run_command cd /home/ctfplayer/workspace && echo "--- json post ---" && curl -s -i -X POST "http://taking-on-the-temple.chal.csaw.io:5000/stone" -H 'Content-Type: application/json' -d '{"answer":"x"}' | head -25 && echo "--- bad cookie ---" && curl -s -i "http://taking-on-the-temple.chal.csaw.io:5000/inventory" -H 'Cookie: session=AAAA' | head -15 && echo "--- array param ---" && curl -s -i -X POST "http://taking-on-the-temple.chal.csaw.io:5000/stone" -d 'answer=a&answer=b' | head -12
+peer findings: 1 new
+[51] create_file {"path": "/home/ctfplayer/workspace/streams.py", "content": "import math\nfrom collections import Counter\nCT = \"SALKMSKXZYRZEJFEOTMBRRZBRXYCXPNJIIWDRYADAIWKKKBEBUDDGNCXTUUBSJXMQVIVPVBYQEVVRBXMTEFGHRVULFEJZZUTXZIVBABSKQESEWKPKGXNVGTZHIFVWLCAQDHOKIGZZRV\"\nN=len(CT)\ndef IC(s):\n    c=Counter(s); n=len(s)\n    return sum(v*(v-1) for v in c.values())/(n*(n-1)) if n>1 else 0\na,b,c3 = CT[0::3], CT[1::3], CT[2::3]\nprint(\"lens:\", len(a), len(b), len(c3))\nfor name,s in ((\"a\",a),(\"b\",b),(\"c\",c3)):\n    print(name, \"IC\", round(IC(s),4), s)\nprint(\"b reversed:\", b[::-1])\nprint(\"c reversed:\", c3[::-1])\n# do any streams match each other (or reversed)?\nprint(\"a==b[::-1]?\", a==b[::-1], \"a==c3?\", a==c3, \"b==c3?\", b==c3)\n\n# caesar on each stream\ntxt = \"\"\nfor fn in (\"alice.txt\",\"dracula.txt\",\"pride.txt\",\"treasure.txt\"):\n    txt += open(fn, encoding='utf-8', errors='ignore').read().upper()\ntxt = ''.join(x for x in txt if 'A' <= x <= 'Z')\nbi = Counter(txt[i:i+2] for i in range(len(txt)-1)); tot=sum(bi.values())\ndef sc(s): return sum(math.log10((bi.get(s[i:i+2],0)+0.1)/tot) for i in range(len(s)-1))/(len(s)-1)\n\nfor name,s in ((\"a\",a),(\"b\",b),(\"c\",c3),(\"brev\",b[::-1]),(\"crev\",c3[::-1])):\n    best=[]\n    for sh in range(26):\n        p=''.join(chr(65+(ord(ch)-65-sh)%26) for ch in s)\n        best.append((sc(p),sh,p))\n    best.sort(reverse=True)\n    print(f\"stream {name}: best shift {best[0][1]} score {best[0][0]:.3f} {best[0][2][:30]}\")\n\n# trio view: list all trios and find mirrored pairs\ntrios = [CT[i:i+3] for i in range(0,N,3)]\nprint(\"\\ntrios:\", len(trios))\nmirror_pairs=[]\nfor i,t in enumerate(trios):\n    for j,u in enumerate(trios):\n        if i<j and t==u[::-1]:\n            mirror_pairs.append((i,j,t))\nprint(\"mirrored trio pairs:\", mirror_pairs)\n# where do doubled letters sit?\nfor i in range(N-1):\n    if CT[i]==CT[i+1]:\n        print(\"double at\", i, CT[i], \"trio\", i//3, \"res\", i%3)\n"}
+[52] run_command cd /home/ctfplayer/workspace && timeout 120 python3 streams.py
+[53] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import math
+from collections import Counter
+CT = "SALKMSKXZYRZEJFEOTMBRRZBRXYCXPNJIIWDRYADAIWKKKBEBUDDGNCXTUUBSJXMQVIVPVBYQEVVRBXMTEFGHRVULFEJZZUTXZIVBABSKQESEWKPKGXNVGTZHIFVWLCAQDHOKIGZZRV"
+ins = "WHATISREMEMBEREDISNEVERWRITTENONLYONCETHELINEWASCOPIEDINMIRROREDTRIOS"
+words = ["WHAT","IS","REMEMBERED","IS","NEVER","WRITTEN","ONLY","ONCE","THE","LINE","WAS","COPIED","IN","MIRRORED","TRIOS"]
+acro = ''.join(w[0] for w in words)
+fina = ''.join(w[-1] for w in words)
+txt = ""
+for fn in ("alice.txt","dracula.txt","pride.txt","treasure.txt"):
+    txt += open(fn, encoding='utf-8', errors='ignore').read().upper()
+txt = ''.join(x for x in txt if 'A' <= x <= 'Z')
+bi = Counter(txt[i:i+2] for i in range(len(txt)-1)); tot=sum(bi.values())
+def sc(s): return sum(math.log10((bi.get(s[i:i+2],0)+0.1)/tot) for i in range(len(s)-1))/(len(s)-1)
+def d(ct,key,mode):
+    return ''.join(chr(65+({'vig':(ord(c)-65-(ord(key[i%len(key)])-65)),'beau':((ord(key[i%len(key)])-65)-(ord(c)-65)),'add':((ord(c)-65)+(ord(key[i%len(key)])-65))}[mode])%26) for i,c in enumerate(ct))
+keys = {"acro":acro, "acro_rev":acro[::-1], "fina":fina, "fina_rev":fina[::-1],
+ "ct3_18_70": CT[3]+CT[18]+CT[70], "ct4_19_71": CT[4]+CT[19]+CT[71],
+ "ins4_19_71": ins[3]+ins[18]+ins[70], "ins4_19_71_1based": ins[4-1-1+1:][:3] or ins[3:6],
+ "WHT":"WHT", "positions_04_19_71_word":"TNH"}
+rows=[]
+for name,k in keys.items():
+    for m in ("vig","beau","add"):
+        p=d(CT,k,m); rows.append((sc(p),name,m,p))
+rows.sort(reverse=True)
+for s,n,m,p in rows[:10]:
+    print(f"{s:7.4f} {n:16s} {m:4s} {p[:66]}")
+print("acro:",acro, "fina:",fina)
+print("ins[3],ins[18],ins[70]:", ins[3],ins[18],ins[70])
+print("CT[3],CT[18],CT[70]:", CT[3],CT[18],CT[70])
+EOF
+[54] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import math
+from collections import Counter
+CT = "SALKMSKXZYRZEJFEOTMBRRZBRXYCXPNJIIWDRYADAIWKKKBEBUDDGNCXTUUBSJXMQVIVPVBYQEVVRBXMTEFGHRVULFEJZZUTXZIVBABSKQESEWKPKGXNVGTZHIFVWLCAQDHOKIGZZRV"
+ins = "WHATISREMEMBEREDISNEVERWRITTENONLYONCETHELINEWASCOPIEDINMIRROREDTRIOS"
+words = ["WHAT","IS","REMEMBERED","IS","NEVER","WRITTEN","ONLY","ONCE","THE","LINE","WAS","COPIED","IN","MIRRORED","TRIOS"]
+acro = ''.join(w[0] for w in words)
+fina = ''.join(w[-1] for w in words)
+txt = ""
+for fn in ("alice.txt","dracula.txt","pride.txt","treasure.txt"):
+    txt += open(fn, encoding='utf-8', errors='ignore').read().upper()
+txt = ''.join(x for x in txt if 'A' <= x <= 'Z')
+bi = Counter(txt[i:i+2] for i in range(len(txt)-1)); tot=sum(bi.values())
+def sc(s): return sum(math.log10((bi.get(s[i:i+2],0)+0.1)/tot) for i in range(len(s)-1))/(len(s)-1)
+def d(ct,key,mode):
+    return ''.join(chr(65+({'vig':(ord(c)-65-(ord(key[i%len(key)])-65)),'beau':((ord(key[i%len(key)])-65)-(ord(c)-65)),'add':((ord(c)-65)+(ord(key[i%len(key)])-65))}[mode])%26) for i,c in enumerate(ct))
+keys = {"acro":acro, "acro_rev":acro[::-1], "fina":fina, "fina_rev":fina[::-1],
+ "ct3_18_70": CT[3]+CT[18]+CT[70],
+ "ct4_19_71": CT[4]+CT[19]+CT[71],
+ "ins4_19_71": ins[3]+ins[18]+ins[30%len(ins)],
+ "WHT":"WHT"}
+rows=[]
+for name,k in keys.items():
+    for m in ("vig","beau","add"):
+        p=d(CT,k,m); rows.append((sc(p),name,m,p))
+rows.sort(reverse=True)
+for s,n,m,p in rows[:10]:
+    print(f"{s:7.4f} {n:16s} {m:4s} {p[:66]}")
+print("acro:",acro,"fina:",fina)
+print("ins[3],[18],[30]:",ins[3],ins[18],ins[30])
+print("CT[3],[18],[70]:",CT[3],CT[18],CT[70])
+EOF
+[55] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import math, random
+from collections import Counter
+txt = ""
+for fn in ("alice.txt","dracula.txt","pride.txt","treasure.txt"):
+    txt += open(fn, encoding='utf-8', errors='ignore').read().upper()
+txt = ''.join(x for x in txt if 'A' <= x <= 'Z')
+bi = Counter(txt[i:i+2] for i in range(len(txt)-1)); tot=sum(bi.values())
+def sc(s): return sum(math.log10((bi.get(s[i:i+2],0)+0.1)/tot) for i in range(len(s)-1))/(len(s)-1)
+def enc(pt,key):
+    return ''.join(chr(65+(ord(p)-65+ord(key[i%len(key)])-65)%26) for i,p in enumerate(pt))
+def d(ct,key):
+    return ''.join(chr(65+(ord(c)-65-(ord(key[i%len(key)])-65))%26) for i,c in enumerate(ct))
+rnd=random.Random(5)
+pt = txt[50000:50139]
+print("pt score:", round(sc(pt),3))
+for L in (5,7,9):
+    key = ''.join(rnd.choice("ABCDEFGHIJKLMNOPQRSTUVWXYZ") for _ in range(L))
+    ct = enc(pt,key)
+    # hillclimb
+    def hc(L, restarts=6):
+        best=None
+        for r in range(restarts):
+            key=[rnd.randrange(26) for _ in range(L)]
+            cur=sc(d(ct,''.join(chr(65+x) for x in key)))
+            improved=True
+            while improved:
+                improved=False
+                for i in range(L):
+                    orig=key[i]
+                    for v in range(26):
+                        key[i]=v
+                        s=sc(d(ct,''.join(chr(65+x) for x in key)))
+                        if s>cur: cur=s; orig=v; improved=True
+                    key[i]=orig
+            if best is None or cur>best[0]: best=(cur,key)
+        return best
+    s,k = hc(L)
+    print(f"L={L} truekey={key} found={''.join(chr(65+x) for x in k)} score={s:.3f} pt={d(ct,''.join(chr(65+x) for x in k))[:50]}")
+EOF
+[56] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import hashlib, zlib, itertools
+CT = "SALKMSKXZYRZEJFEOTMBRRZBRXYCXPNJIIWDRYADAIWKKKBEBUDDGNCXTUUBSJXMQVIVPVBYQEVVRBXMTEFGHRVULFEJZZUTXZIVBABSKQESEWKPKGXNVGTZHIFVWLCAQDHOKIGZZRV"
+target = "7f1a0d"
+algs = ["md5","sha1","sha224","sha256","sha384","sha512","blake2b","blake2s","sha3_256","sha3_512"]
+def check(s, label):
+    b = s.encode()
+    hits=[]
+    for a in algs:
+        h = hashlib.new(a, b).hexdigest()
+        if h.startswith(target) or target in h[:16]:
+            hits.append((a,h[:12]))
+    c = zlib.crc32(b)
+    if format(c,'08x').startswith(target) or target in format(c,'08x'):
+        hits.append(("crc32",format(c,'08x')))
+    for a,v in hits:
+        print("HIT", label, a, v, s[:50])
+    return hits
+# all caesar shifts
+for sh in range(26):
+    p = ''.join(chr(65+(ord(c)-65-sh)%26) for c in CT)
+    check(p, f"caesar{sh}")
+    check(p.lower(), f"caesar{sh}lower")
+# atbash
+atb = ''.join(chr(65+(25-(ord(c)-65))%26) for c in CT)
+check(atb, "atbash")
+# reversed
+check(CT[::-1], "ct_rev")
+# with spaces every 5? no. numeric digits as-is
+check("041971","041971")
+print("done caesar/atbash sweep")
+EOF
+[57] run_command cd /home/ctfplayer/workspace && for m in OPTIONS HEAD TRACE PATCH PUT DELETE; do echo "== $m /"; curl -s -i -X $m "http://taking-on-the-temple.chal.csaw.io:5000/" -o /dev/null -w "%{http_code}\n"; done; echo "== OPTIONS /stone"; curl -s -i -X OPTIONS "http://taking-on-the-temple.chal.csaw.io:5000/stone" | head -12
+[58] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import math
+from collections import Counter
+CT = "SALKMSKXZYRZEJFEOTMBRRZBRXYCXPNJIIWDRYADAIWKKKBEBUDDGNCXTUUBSJXMQVIVPVBYQEVVRBXMTEFGHRVULFEJZZUTXZIVBABSKQESEWKPKGXNVGTZHIFVWLCAQDHOKIGZZRV"
+words = ["WHAT","IS","REMEMBERED","IS","NEVER","WRITTEN","ONLY","ONCE","THE","LINE","WAS","COPIED","IN","MIRRORED","TRIOS"]
+tri = []
+for i in range(0,15,3):
+    tri.extend(words[i:i+3][::-1])
+key = ''.join(tri)
+print("word-trio-mirrored key:", key, len(key))
+# letter-level trio mirror of that
+km = ''.join(key[i:i+3][::-1] for i in range(0,len(key),3))
+txt = ""
+for fn in ("alice.txt","dracula.txt","pride.txt","treasure.txt"):
+    txt += open(fn, encoding='utf-8', errors='ignore').read().upper()
+txt = ''.join(x for x in txt if 'A' <= x <= 'Z')
+bi = Counter(txt[i:i+2] for i in range(len(txt)-1)); tot=sum(bi.values())
+def sc(s): return sum(math.log10((bi.get(s[i:i+2],0)+0.1)/tot) for i in range(len(s)-1))/(len(s)-1)
+def d(ct,key,mode):
+    return ''.join(chr(65+({'vig':(ord(c)-65-(ord(key[i%len(key)])-65)),'beau':((ord(key[i%len(key)])-65)-(ord(c)-65)),'add':((ord(c)-65)+(ord(key[i%len(key)])-65))}[mode])%26) for i,c in enumerate(ct))
+rows=[]
+for nm,k in (("wtm",key),("wtm_letters",km),("wtm_rev",key[::-1])):
+    for m in ("vig","beau","add"):
+        p=d(CT,k,m); rows.append((sc(p),nm,m,p))
+rows.sort(reverse=True)
+for s,n,m,p in rows:
+    print(f"{s:7.4f} {n:12s} {m:4s} {p[:66]}")
+EOF
+[59] run_command {}
+[60] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import base64, re
+# index braille: "A KEY DIVIDED" + "BRAILLE OPENS THE OLD REGIS..."
+A = "⠁ ⠅⠑⠽ ⠙⠊⠧⠊⠙⠑⠙"
+B = "⠃⠗⠁⠊⠇⠇⠑ ⠕⠏⠑⠝⠎ ⠞⠓⠑ ⠕⠇⠙ ⠗⠑⠛⠊⠎"
+def cells(s):
+    return [ord(c)-0x2800 for c in s if 0x2800 <= ord(c) <= 0x283F]
+for name, s in (("A",A),("B",B)):
+    cs = cells(s)
+    print(name, "count:", len(cs))
+    print(name, "6bit values:", cs)
+    bits = ''.join(format(v,'06b') for v in cs)
+    print(name, "bits:", bits, "nbits:", len(bits))
+    by = bytes(int(bits[i:i+8],2) for i in range(0,len(bits)-7,8))
+    print(name, "as bytes:", by)
+    # also try as base64 alphabet indices
+    print()
+EOF
+[61] create_file {"path": "/home/ctfplayer/workspace/matrix.py", "content": "import math\nfrom collections import Counter\nCT = \"SALKMSKXZYRZEJFEOTMBRRZBRXYCXPNJIIWDRYADAIWKKKBEBUDDGNCXTUUBSJXMQVIVPVBYQEVVRBXMTEFGHRVULFEJZZUTXZIVBABSKQESEWKPKGXNVGTZHIFVWLCAQDHOKIGZZRV\"\ntxt = \"\"\nfor fn in (\"alice.txt\",\"dracula.txt\",\"pride.txt\",\"treasure.txt\"):\n    txt += open(fn, encoding='utf-8', errors='ignore').read().upper()\ntxt = ''.join(x for x in txt if 'A' <= x <= 'Z')\nbi = Counter(txt[i:i+2] for i in range(len(txt)-1)); tot=sum(bi.values())\ndef sc(s): return sum(math.log10((bi.get(s[i:i+2],0)+0.1)/tot) for i in range(len(s)-1))/(len(s)-1)\n\ndef transforms(ct):\n    yield \"id\", ct\n    yield \"rev\", ct[::-1]\n    yield \"triom\", ''.join(ct[i:i+3][::-1] for i in range(0,len(ct),3))\n    for perm in ((0,1,2),(2,1,0),(1,0,2),(0,2,1),(1,2,0),(2,0,1)):\n        ss=[ct[i::3][::-1] for i in range(3)]\n        ss=[ss[p] for p in perm]\n        out=[]; idx=[0,0,0]; k=0\n        while any(idx[j]<len(ss[j]) for j in range(3)):\n            j=k%3\n            if idx[j]<len(ss[j]): out.append(ss[j][idx[j]]); idx[j]+=1\n            k+=1\n        yield f\"streams{perm}\", ''.join(out)\n    cols=[ct[i::3] for i in range(3)]\n    yield \"col3\", ''.join(''.join(c) for c in cols)\n    yield \"col3rev\", ''.join(''.join(c[::-1]) for c in cols)\n    # trio stream rotate: rotate each trio\n    yield \"triorot1\", ''.join(ct[i+1]+ct[i+2]+ct[i] for i in range(0,len(ct)-2,3))\n    yield \"triorot2\", ''.join(ct[i+2]+ct[i]+ct[i+1] for i in range(0,len(ct)-2,3))\n\ndef modes(ct, key):\n    L=len(key)\n    for m in (\"vig\",\"beau\",\"add\"):\n        out=[]\n        for i,c in enumerate(ct):\n            x=ord(c)-65; k=ord(key[i%L])-65\n            p={'vig':x-k,'beau':k-x,'add':x+k}[m]%26\n            out.append(chr(65+p))\n        yield m, ''.join(out)\n\ndef rots(s):\n    return [s[i:]+s[:i] for i in range(len(s))]\n\nbase_keys = {\n \"braille\":\"STONEREMEMBERTHELOCK\",\n \"braille2\":\"REMEMBERTHELOCK\",\n \"inscription\":\"WHATISREMEMBEREDISNEVERWRITTENONLYONCETHELINEWASCOPIEDINMIRROREDTRIOS\",\n \"s31\":\"THELINEWASCOPIEDINMIRROREDTRIOS\",\n \"s38\":\"WHATISREMEMBEREDISNEVERWRITTENONLYONCE\",\n \"checksum\":\"CHECKSUMFAILNOTKEY\",\n \"date\":\"APRIL1971\",\n \"granite\":\"GRANITEFROSTIRON\",\n \"acro\":\"WIRINWOOTLWCIMT\",\n}\ndef trio_mirror(s):\n    return ''.join(s[i:i+3][::-1] for i in range(0,len(s),3))\ndef word_trio(words):\n    out=[]\n    for i in range(0,len(words),3):\n        out.extend(words[i:i+3][::-1])\n    return ''.join(out)\nwords = [\"WHAT\",\"IS\",\"REMEMBERED\",\"IS\",\"NEVER\",\"WRITTEN\",\"ONLY\",\"ONCE\",\"THE\",\"LINE\",\"WAS\",\"COPIED\",\"IN\",\"MIRRORED\",\"TRIOS\"]\nbase_keys[\"ins_wtrio\"] = word_trio(words)\nbase_keys[\"ins_triom\"] = trio_mirror(base_keys[\"inscription\"])\nbase_keys[\"s31_triom\"] = trio_mirror(base_keys[\"s31\"])\nbase_keys[\"braille_triom\"] = trio_mirror(base_keys[\"braille\"])\n\nresults=[]\nfor tname, tct in transforms(CT):\n    for kname, k in base_keys.items():\n        for r in rots(k):\n            for m, p in modes(tct, r):\n                results.append((sc(p), tname, kname, r, m, p))\nresults.sort(reverse=True)\nprint(\"total decryptions:\", len(results))\nfor s,t,k,r,m,p in results[:20]:\n    print(f\"{s:7.4f} {t:10s} {k:10s} rot={r[:12]:12s} {m:4s} {p[:60]}\")\n"}
+finished: aborted reason=aborted rounds=61 cost=$0.1218 transcript=C:\Users\Dingus\csaw26_llm_ctf\logs\evals\20261110-230852__eval\02__Midnight Vault\lane-1\20261110-233024__crypto_Midnight_Vault_main_z-ai_glm-5_3-flash.json

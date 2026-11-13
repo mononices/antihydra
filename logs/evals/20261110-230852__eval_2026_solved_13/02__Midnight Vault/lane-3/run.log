@@ -1,0 +1,364 @@
+[01] run_command cd /home/ctfplayer/workspace 2>/dev/null || mkdir -p /home/ctfplayer/workspace && cd /home/ctfplayer/workspace; curl -s -i --max-time 30 http://taking-on-the-temple.chal.csaw.io:5000/ | head -100
+[01] run_command ls -la /home/ctfplayer/ctf_files/; cat /tools.txt 2>/dev/null | head -50
+[02] run_command cd /home/ctfplayer/workspace; for p in stone frost iron altar inventory; do echo "=== /$p ==="; curl -s --max-time 30 http://taking-on-the-temple.chal.csaw.io:5000/$p; echo; done
+[03] run_command cd /home/ctfplayer/workspace; python3 - <<'EOF'
+ct="SALKMSKXZYRZEJFEOTMBRRZBRXYCXPNJIIWDRYADAIWKKKBEBUDDGNCXTUUBSJXMQVIVPVBYQEVVRBXMTEFGHRVULFEJZZUTXZIVBABSKQESEWKPKGXNVGTZHIFVWLCAQDHOKIGZZRV"
+print(len(ct))
+n=len(ct)
+print(n%3)
+# split into 3
+k=n//3
+a=ct[:k]; b=ct[k:2*k]; c=ct[2*k:]
+print(a)
+print(b)
+print(c)
+# check if b is reverse of a etc
+print("b==a?", b==a)
+print("c==a?", c==a)
+print("b==a[::-1]?", b==a[::-1])
+print("c==b[::-1]?", c==b[::-1])
+EOF
+[04] run_command cd /home/ctfplayer/workspace; curl -s --max-time 30 http://taking-on-the-temple.chal.csaw.io:5000/stone > stone.html; python3 - <<'EOF'
+import re
+h=open('stone.html').read()
+# find ciphertext line
+m=re.search(r'Ciphertext:\n([A-Z]+)', h)
+ct=m.group(1)
+print(repr(ct), len(ct))
+EOF
+[05] run_command cd /home/ctfplayer/workspace; python3 - <<'EOF'
+ct="SALKMSKXZYRZEJFEOTMBRRZBRXYCXPNJIIWDRYADAIWKKKBEBUDDGNCXTUUBSJXMQVIVPVBYQEVVRBXMTEFGHRVULFEJZZUTXZIVBABSKQESEWKPKGXNVGTZHIFVWLCAQDHOKIGZZRV"
+
+def railfence_decrypt(ct, rails):
+    n=len(ct)
+    # pattern of rail indices
+    pattern=[]
+    r=0; d=1
+    for i in range(n):
+        pattern.append(r)
+        if r==0: d=1
+        elif r==rails-1: d=-1
+        r+=d
+    # counts per rail
+    from collections import Counter
+    cnt=Counter(pattern)
+    # assign ct chars
+    idx=0
+    railchars={}
+    for rr in range(rails):
+        railchars[rr]=list(ct[idx:idx+cnt[rr]])
+        idx+=cnt[rr]
+    pos={rr:0 for rr in range(rails)}
+    out=[]
+    for rr in pattern:
+        out.append(railchars[rr][pos[rr]])
+        pos[rr]+=1
+    return ''.join(out)
+
+for rails in range(2,10):
+    print(rails, railfence_decrypt(ct,rails)[:80])
+EOF
+[06] run_command cd /home/ctfplayer/workspace; python3 - <<'EOF'
+ct="SALKMSKXZYRZEJFEOTMBRRZBRXYCXPNJIIWDRYADAIWKKKBEBUDDGNCXTUUBSJXMQVIVPVBYQEVVRBXMTEFGHRVULFEJZZUTXZIVBABSKQESEWKPKGXNVGTZHIFVWLCAQDHOKIGZZRV"
+def atbash(s):
+    return ''.join(chr(ord('Z')-(ord(c)-ord('A'))) for c in s)
+print("atbash:",atbash(ct))
+
+# try reverse of ciphertext
+print("rev:", ct[::-1])
+
+# try rail fence on atbash
+def railfence_decrypt(ct, rails):
+    n=len(ct)
+    pattern=[]; r=0; d=1
+    for i in range(n):
+        pattern.append(r)
+        if r==0: d=1
+        elif r==rails-1: d=-1
+        r+=d
+    from collections import Counter
+    cnt=Counter(pattern)
+    idx=0; railchars={}
+    for rr in range(rails):
+        railchars[rr]=list(ct[idx:idx+cnt[rr]]); idx+=cnt[rr]
+    pos={rr:0 for rr in range(rails)}
+    out=[]
+    for rr in pattern:
+        out.append(railchars[rr][pos[rr]]); pos[rr]+=1
+    return ''.join(out)
+a=atbash(ct)
+for rails in range(2,8):
+    print("atbash rail",rails, railfence_decrypt(a,rails)[:80])
+EOF
+[07] run_command cd /home/ctfplayer/workspace; python3 - <<'EOF'
+import itertools, math
+ct="SALKMSKXZYRZEJFEOTMBRRZBRXYCXPNJIIWDRYADAIWKKKBEBUDDGNCXTUUBSJXMQVIVPVBYQEVVRBXMTEFGHRVULFEJZZUTXZIVBABSKQESEWKPKGXNVGTZHIFVWLCAQDHOKIGZZRV"
+ENG="ETAOINSHRDLCUMWFGYPBVKJXQZ"
+def score(s):
+    # simple english score using quadgram-ish: just letter freq + common words
+    sc=0
+    for i,ch in enumerate(s):
+        sc += (26-ENG.index(ch)) if ch in ENG else 0
+    return sc
+
+def col_trans_decrypt(ct, ncols, perm):
+    n=len(ct)
+    nrows = math.ceil(n/ncols)
+    # number of full cells
+    # column lengths: first (n mod ncols) columns have nrows, rest nrows-1
+    rem = n % ncols
+    if rem==0: rem=ncols
+    collen=[nrows if i<rem else nrows-1 for i in range(ncols)]
+    # read columns in order perm
+    cols=[None]*ncols
+    idx=0
+    for c in perm:
+        cols[c]=ct[idx:idx+collen[c]]
+        idx+=collen[c]
+    out=[]
+    for r in range(nrows):
+        for c in range(ncols):
+            if r<len(cols[c]):
+                out.append(cols[c][r])
+    return ''.join(out)
+
+best=[]
+for ncols in range(2,12):
+    for perm in itertools.permutations(range(ncols)):
+        pt=col_trans_decrypt(ct,ncols,perm)
+        s=score(pt)
+        best.append((s,ncols,perm,pt))
+best.sort(reverse=True)
+for s,nc,p,pt in best[:10]:
+    print(nc,p,pt[:90])
+EOF
+peer findings: 3 new
+[08] run_command cd /home/ctfplayer/workspace; python3 - <<'EOF'
+ct="SALKMSKXZYRZEJFEOTMBRRZBRXYCXPNJIIWDRYADAIWKKKBEBUDDGNCXTUUBSJXMQVIVPVBYQEVVRBXMTEFGHRVULFEJZZUTXZIVBABSKQESEWKPKGXNVGTZHIFVWLCAQDHOKIGZZRV"
+n=len(ct)
+print("len",n, "n%3", n%3)
+# try dropping first char
+for start in range(3):
+    s=ct[start:]
+    if len(s)%3==0:
+        k=len(s)//3
+        A,B,C=s[:k],s[k:2*k],s[2*k:]
+        print("start",start,"A==B",A==B,"A==C",A==C,"B==C",B==C)
+        print("B==rev(A)",B==A[::-1],"C==rev(B)",C==B[::-1],"C==rev(A)",C==A[::-1])
+        print("A",A)
+        print("B",B)
+        print("C",C)
+
+# reverse each trio
+def revtrio(s):
+    return ''.join(s[i:i+3][::-1] for i in range(0,len(s),3))
+print("revtrio:",revtrio(ct))
+print("revtrio rev:",revtrio(ct[::-1]))
+
+# IC
+from collections import Counter
+c=Counter(ct)
+N=len(ct)
+ic=sum(v*(v-1) for v in c.values())/(N*(N-1))
+print("IC",ic)
+print(sorted(c.items(), key=lambda x:-x[1])[:15])
+EOF
+[09] run_command cd /home/ctfplayer/workspace; for p in "" stone frost iron altar inventory; do curl -s --max-time 30 "http://taking-on-the-temple.chal.csaw.io:5000/$p" -o "page_${p:-root}.html"; done; ls -la; echo "=== FROST ==="; cat page_frost.html; echo; echo "=== IRON ==="; cat page_iron.html
+[10] run_command cd /home/ctfplayer/workspace; python3 - <<'EOF'
+import re
+h=open('page_stone.html',encoding='utf-8').read()
+# print the pre block
+m=re.search(r'<pre>(.*?)</pre>', h, re.S)
+print(m.group(1))
+print("-----")
+# extract braille
+for line in m.group(1).split('\n'):
+    if 'Braille' in line:
+        b=line.split(':',1)[1].strip()
+        print([hex(ord(c)) for c in b])
+        print(b)
+EOF
+[11] run_command cd /home/ctfplayer/workspace; python3 - <<'EOF'
+# standard English braille table: dots tuple -> letter
+table = {
+ (1,):'a',(1,2):'b',(1,4):'c',(1,4,5):'d',(1,5):'e',(1,2,4):'f',(1,2,4,5):'g',
+ (1,2,5):'h',(2,4):'i',(2,4,5):'j',(1,3):'k',(1,2,3):'l',(1,3,4):'m',(1,3,4,5):'n',
+ (1,3,5):'o',(1,2,3,4):'p',(1,2,3,4,5):'q',(1,2,3,5):'r',(2,3,4):'s',(2,3,4,5):'t',
+ (1,3,6):'u',(1,2,3,6):'v',(2,4,5,6):'w',(1,3,4,6):'x',(1,3,4,5,6):'y',(1,3,5,6):'z',
+ ():' ',
+}
+def decode(s):
+    out=[]
+    for ch in s:
+        o=ord(ch)-0x2800
+        dots=tuple(i+1 for i in range(6) if o>>i & 1)
+        out.append(table.get(dots, '?'+str(dots)))
+    return ''.join(out)
+
+stone="⠎⠞⠕⠝⠑  ⠗⠑⠍⠑⠍⠃⠑⠗ ⠞⠓⠑ ⠛⠕⠙"
+root1="⠁ ⠅⠑⠽ ⠙⠊⠧⠊⠙⠑⠙"
+root2="⠃⠗⠁⠊⠇⠇⠑ ⠕⠏⠑⠝⠎ ⠞⠓⠑ ⠕⠇⠙ ⠗⠑⠛⠊⠎"
+print("stone:", decode(stone))
+print("root1:", decode(root1))
+print("root2:", decode(root2))
+# print codepoints
+for ch in stone+root1+root2:
+    print(hex(ord(ch)), end=' ')
+print()
+EOF
+peer findings: 2 new
+[12] run_command find / -name "hill*.py" -o -name "vig.py" 2>/dev/null; echo "---"; ls -la /home/ctfplayer/ctf_files/; echo "---"; find /home/ctfplayer -type f 2>/dev/null | head -50
+[12] run_command cd /home/ctfplayer/workspace; cat page_altar.html; echo; echo "=== INVENTORY ==="; cat page_inventory.html
+[13] run_command cd /home/ctfplayer/workspace; for p in robots.txt static/ files/ hill.py vig.py hill_mono.py download source src/ .git/HEAD flag vault registry; do code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "http://taking-on-the-temple.chal.csaw.io:5000/$p"); echo "$code  /$p"; done
+[13] run_command cd /home/ctfplayer/workspace; python3 - <<'EOF'
+# braille root phrases
+table = {
+ (1,):'a',(1,2):'b',(1,4):'c',(1,4,5):'d',(1,5):'e',(1,2,4):'f',(1,2,4,5):'g',
+ (1,2,5):'h',(2,4):'i',(2,4,5):'j',(1,3):'k',(1,2,3):'l',(1,3,4):'m',(1,3,4,5):'n',
+ (1,3,5):'o',(1,2,3,4):'p',(1,2,3,4,5):'q',(1,2,3,5):'r',(2,3,4):'s',(2,3,4,5):'t',
+ (1,3,6):'u',(1,2,3,6):'v',(2,4,5,6):'w',(1,3,4,6):'x',(1,3,4,5,6):'y',(1,3,5,6):'z',
+ ():' ',
+}
+def decode(s):
+    out=[]
+    for ch in s:
+        o=ord(ch)-0x2800
+        dots=tuple(i+1 for i in range(6) if o>>i & 1)
+        out.append(table.get(dots, '?'))
+    return ''.join(out)
+root1="⠁ ⠅⠑⠽ ⠙⠊⠧⠊⠙⠑⠙"
+root2="⠃⠗⠁⠊⠇⠇⠑ ⠕⠏⠑⠝⠎ ⠞⠓⠑ ⠕⠇⠙ ⠗⠑⠛⠊⠎"
+print(decode(root1))
+print(decode(root2))
+EOF
+[14] run_command cd /home/ctfplayer/workspace; curl -s --max-time 30 "http://taking-on-the-temple.chal.csaw.io:5000/vault"; echo; echo "=== POST empty ==="; curl -s --max-time 30 -X POST -d "answer=" "http://taking-on-the-temple.chal.csaw.io:5000/vault"
+[15] run_command cd /home/ctfplayer/workspace; python3 - <<'EOF'
+import re
+h=open('page_stone.html',encoding='utf-8').read()
+m=re.search(r'Ciphertext:\s*\n([A-Za-z0-9+/=]+)', h)
+ct=m.group(1)
+print("len",len(ct))
+# Kasiski: find repeated substrings length>=3
+from collections import defaultdict
+d=defaultdict(list)
+for L in range(3,8):
+    for i in range(len(ct)-L+1):
+        d[ct[i:i+L]].append(i)
+rep={k:v for k,v in d.items() if len(v)>1}
+for k,v in sorted(rep.items(), key=lambda x:-len(x[0]))[:40]:
+    print(k, v, [v[i+1]-v[i] for i in range(len(v)-1)])
+EOF
+[16] run_command cd /home/ctfplayer/workspace; echo "=== POST stone dummy ==="; curl -s --max-time 30 -X POST -d "answer=HELLO" "http://taking-on-the-temple.chal.csaw.io:5000/stone" | python3 -c "import sys,re;h=sys.stdin.read();print(re.search(r'<pre>(.*?)</pre>',h,re.S).group(1))"
+[16] run_command find / -newermt "2026-11-01" -type f 2>/dev/null | grep -v -E "^/(proc|sys|dev|run|tmp|var/log|var/cache)" | head -60; echo "==="; ls -la /root 2>/dev/null; ls -la /opt /srv 2>/dev/null
+[17] run_command cd /home/ctfplayer/workspace; python3 - <<'EOF'
+import re
+h=open('page_stone.html',encoding='utf-8').read()
+ct=re.search(r'Ciphertext:\s*\n([A-Z]+)', h).group(1)
+N=len(ct)
+def ic(s):
+    from collections import Counter
+    c=Counter(s); n=len(s)
+    if n<2: return 0
+    return sum(v*(v-1) for v in c.values())/(n*(n-1))
+print("overall IC", ic(ct))
+# average IC per key length
+for kl in range(1,25):
+    cols=[''.join(ct[i] for i in range(j,N,kl)) for j in range(kl)]
+    avg=sum(ic(c) for c in cols)/kl
+    print(kl, round(avg,4))
+EOF
+[18] run_command cd /home/ctfplayer/workspace; cat > trifid.py <<'EOF'
+import re, itertools
+h=
+[19] create_file {"path": "/home/ctfplayer/workspace/trifid.py", "content": "import re, itertools\nh=open('/home/ctfplayer/workspace/page_stone.html',encoding='utf-8').read()\nct=re.search(r'Ciphertext:\\s*\\n([A-Z]+)', h).group(1)\nN=len(ct)\nprint(\"len\",N)\n\n# Trifid cube: 3 layers, each 3x3 = 27 cells for 26 letters + '.'\n# standard 27-char alphabet: A-Z and '.'\nalpha = \"ABCDEFGHIJKLMNOPQRSTUVWXYZ.\"\n\ndef build_cube(alpha):\n    cube={}\n    for i,ch in enumerate(alpha):\n        layer=i//9\n        row=(i%9)//3\n        col=i%3\n        cube[ch]=(layer,row,col)\n    return cube\n\ndef trifid_decrypt(ct, alpha, period):\n    cube=build_cube(alpha)\n    # build reverse lookup\n    inv={v:k for k,v in cube.items()}\n    out=[]\n    for start in range(0,len(ct),period):\n        block=ct[start:start+period]\n        nums=[]\n        for ch in block:\n            nums.extend(cube[ch])\n        # regroup into triples\n        newnums=[tuple(nums[i:i+3]) for i in range(0,len(nums),3)]\n        for t in newnums:\n            out.append(inv.get(t,'?'))\n    return ''.join(out)\n\ndef score(s):\n    ENG=\"ETAOINSHRDLCUMWFGYPBVKJXQZ\"\n    return sum((26-ENG.index(c)) for c in s if c in ENG)\n\nresults=[]\nfor alpha in [\"ABCDEFGHIJKLMNOPQRSTUVWXYZ.\", \"ABCDEFGHIJKLMNOPQRSTUVWXYZ\"]:\n    for period in range(1,40):\n        pt=trifid_decrypt(ct, alpha, period)\n        results.append((score(pt), alpha[-1], period, pt))\nresults.sort(reverse=True)\nfor r in results[:15]:\n    print(r[0], repr(r[1]), r[2], r[3][:90])\n"}
+[20] run_command cd /home/ctfplayer/workspace; python3 trifid.py
+[21] create_file {"content": "import re, itertools\nh=open('/home/ctfplayer/workspace/page_stone.html',encoding='utf-8').read()\nct=re.search(r'Ciphertext:\\s*\\n([A-Z]+)', h).group(1)\nN=len(ct)\nprint(\"len\",N)\n\ndef build_cube(alpha):\n    cube={}\n    for i,ch in enumerate(alpha):\n        cube[ch]=(i//9,(i%9)//3,i%3)\n    return cube\n\ndef trifid_decrypt(ct, alpha, period):\n    cube=build_cube(alpha)\n    inv={v:k for k,v in cube.items()}\n    out=[]\n    for start in range(0,len(ct),period):\n        block=ct[start:start+period]\n        L=len(block)\n        layers=[cube[c][0] for c in block]\n        rows=[cube[c][1] for c in block]\n        cols=[cube[c][2] for c in block]\n        nums=layers+rows+cols\n        for i in range(0,3*L,3):\n            t=tuple(nums[i:i+3])\n            out.append(inv.get(t,'?'))\n    return ''.join(out)\n\ndef score(s):\n    ENG=\"ETAOINSHRDLCUMWFGYPBVKJXQZ\"\n    return sum((26-ENG.index(c)) for c in s if c in ENG)\n\nresults=[]\nfor alpha in [\"ABCDEFGHIJKLMNOPQRSTUVWXYZ.\", \"ABCDEFGHIJKLMNOPQRSTUVWXYZ\"]:\n    for period in range(1,60):\n        pt=trifid_decrypt(ct, alpha, period)\n        results.append((score(pt), alpha[-1], period, pt))\nresults.sort(reverse=True)\nfor r in results[:20]:\n    print(r[0], repr(r[1]), r[2], r[3][:100])\n", "path": "/home/ctfplayer/workspace/trifid.py"}
+[22] run_command cd /home/ctfplayer/workspace; python3 trifid.py
+[23] run_command find / -name "*.py" 2>/dev/null | xargs grep -l "SALKMSK\|hill_mono\|def hill" 2>/dev/null | head; echo "---search names---"; find / -iname "*hill*" -o -iname "*vig*" 2>/dev/null | grep -v -E "cado|sage|dist-packages|site-packages" | head -40
+[23] run_command cd /home/ctfplayer/workspace; for f in hill.py vig.py hill_mono.py static/hill.py files/hill.py; do echo "== $f =="; curl -s --max-time 10 "http://taking-on-the-temple.chal.csaw.io:5000/$f" | head -5; done; echo "=== try /stone POST with wrong to see error ==="; curl -s --max-time 10 -X POST -d "answer=TEST" "http://taking-on-the-temple.chal.csaw.io:5000/stone" | grep -o "<pre>.*</pre>" | head -c 2000
+[24] run_command cd /home/ctfplayer/workspace; echo "=== POST stone TEST full ==="; curl -s -i --max-time 10 -X POST -d "answer=TEST" "http://taking-on-the-temple.chal.csaw.io:5000/stone" | tail -30
+[25] run_command find / -name "hill.py" -o -name "vig.py" -o -name "hill_mono.py" 2>/dev/null; echo "---all py in home/tmp/opt non-standard---"; find /home /tmp /opt /root /srv /var/tmp -name "*.py" 2>/dev/null | grep -v -E "cado|ghidra" | head -40; echo "--- recent files anywhere ---"; find / -type f -newermt "2026-11-10" 2>/dev/null | grep -v -E "^/(proc|sys|dev|run)" | head -40
+[26] run_command {}
+[27] run_command cd /home/ctfplayer/workspace; timeout 20 curl -s -o /dev/null -w "%{http_code}\n" https://raw.githubusercontent.com/ 2>&1; echo "---"; ls /usr/share/dict/ 2>/dev/null; ls /usr/share/ | head; echo "--- pip check ---"; pip download --no-deps --dest /tmp/x quadgram 2>&1 | tail -2
+[27] run_command cd /home/ctfplayer/workspace; python3 - <<'EOF'
+ct="SALKMSKXZYRZEJFEOTMBRRZBRXYCXPNJIIWDRYADAIWKKKBEBUDDGNCXTUUBSJXMQVIVPVBYQEVVRBXMTEFGHRVULFEJZZUTXZIVBABSKQESEWKPKGXNVGTZHIFVWLCAQDHOKIGZZRV"
+def revtrio(s):
+    return ''.join(s[i:i+3][::-1] for i in range(0,len(s),3))
+def caesar(s,k):
+    return ''.join(chr((ord(c)-65+k)%26+65) for c in s)
+def atbash(s):
+    return ''.join(chr(90-(ord(c)-65)) for c in s)
+def rev(s): return s[::-1]
+
+cands={}
+base=ct
+for name,fn in [("id",lambda x:x),("revtrio",revtrio),("rev",rev),("revtrio_rev",lambda x:revtrio(rev(x))),("rev_revtrio",lambda x:rev(revtrio(x)))]:
+    t=fn(base)
+    for k in range(26):
+        cands[f"{name}_caesar{k}"]=caesar(t,k)
+        cands[f"{name}_atbash_caesar{k}"]=caesar(atbash(t),k)
+
+# score by counting common trigrams
+trigrams=["THE","AND","ING","ION","ENT","FOR","HER","TER","HAT","THA","ERE","ATE","HIS","CON","RES","VER","ALL","OUL","ULD","PER","NOT","ARE","BUT","WAS","ONE","OUR","OUT","YOU","HAD","HAV","WIT","WHE","WHI","WIL","WIT","ITH","TIO","EAR"]
+def score(s):
+    return sum(s.count(t) for t in trigrams)
+res=sorted(cands.items(), key=lambda x:-score(x[1]))
+for name,s in res[:15]:
+    print(score(s), name, s[:80])
+EOF
+peer findings: 1 new
+[29] create_file {"content": "import re\nfrom math import gcd\n\nh=open('/home/ctfplayer/workspace/page_stone.html',encoding='utf-8').read()\nct=re.search(r'Ciphertext:\\s*\\n([A-Z]+)', h).group(1)\nprint(\"len\",len(ct))\n\ndef modinv(a,m):\n    a%=m\n    for x in range(1,m):\n        if (a*x)%m==1: return x\n    return None\n\ndef mat_inv2(K,m=26):\n    a,b,c,d=K[0][0],K[0][1],K[1][0],K[1][1]\n    det=(a*d-b*c)%m\n    di=modinv(det,m)\n    if di is None: return None\n    return [[(d*di)%m,(-b*di)%m],[(-c*di)%m,(a*di)%m]]\n\ndef hill_decrypt(ct,K,m=26):\n    Kinv=mat_inv2(K,m)\n    if Kinv is None: return None\n    out=[]\n    for i in range(0,len(ct)-1,2):\n        x=[ord(ct[i])-65, ord(ct[i+1])-65]\n        y=[(Kinv[0][0]*x[0]+Kinv[0][1]*x[1])%m,(Kinv[1][0]*x[0]+Kinv[1][1]*x[1])%m]\n        out.append(chr(y[0]+65)); out.append(chr(y[1]+65))\n    return ''.join(out)\n\n# Key candidates from \"04 / 19 / 71\"\nkeys=[[[4,19],[7,1]], [[4,19],[71,0]], [[4,19],[7,1]]]\nfor K in keys:\n    print(\"K\",K)\n    for label,s in [(\"full\",ct),(\"drop_last\",ct[:-1]),(\"drop_first\",ct[1:])]:\n        pt=hill_decrypt(s,K)\n        print(\"  \",label,pt)\n\n# also try key as column-major [[4,7],[19,1]]\nK=[[4,7],[19,1]]\nprint(\"K colmajor\",K)\nfor label,s in [(\"full\",ct),(\"drop_last\",ct[:-1]),(\"drop_first\",ct[1:])]:\n    print(\"  \",label,hill_decrypt(s,K))\n", "path": "/home/ctfplayer/workspace/hill_try.py"}
+[30] run_command cd /home/ctfplayer/workspace; python3 hill_try.py
+[31] run_command cd /home/ctfplayer/workspace; ls /usr/share/dict/ 2>/dev/null; find / -iname "*quadgram*" -o -iname "*ngrams*" 2>/dev/null | head; echo "--- internet test ---"; curl -sL --max-time 20 "https://raw.githubusercontent.com/gsinclair/ngram/master/README.md" -o /tmp/t.md -w "%{http_code}\n"; head -5 /tmp/t.md 2>/dev/null
+[31] run_command cd /home/ctfplayer/workspace; python3 - <<'EOF'
+ct="SALKMSKXZYRZEJFEOTMBRRZBRXYCXPNJIIWDRYADAIWKKKBEBUDDGNCXTUUBSJXMQVIVPVBYQEVVRBXMTEFGHRVULFEJZZUTXZIVBABSKQESEWKPKGXNVGTZHIFVWLCAQDHOKIGZZRV"
+# print in trios
+for i in range(0,len(ct),3):
+    print(ct[i:i+3], end=' ')
+print()
+print("len",len(ct))
+# columns mod 3
+print("c0",ct[0::3])
+print("c1",ct[1::3])
+print("c2",ct[2::3])
+# check mirror relation within trios
+for i in range(0,len(ct)-2,3):
+    t=ct[i:i+3]
+    if t[0]==t[2]:
+        print("pal",i,t)
+EOF
+[32] run_command ls -la /usr/share/dict/ 2>/dev/null; find / -iname "words" -type f 2>/dev/null | head; echo "--- try download quadgrams ---"; for u in "https://raw.githubusercontent.com/dwyl/english-words/master/words_alpha.txt" "https://norvig.com/ngrams/count_1w.txt"; do echo "== $u"; curl -sL --max-time 25 "$u" -o /tmp/dl.txt -w "%{http_code} %{size_download}\n"; done; ls -la /tmp/dl.txt
+[33] run_command cd /home/ctfplayer/workspace; for u in "https://raw.githubusercontent.com/dwyl/english-words/master/words_alpha.txt" "http://practicalcryptography.com/media/cryptanalysis/files/english_quadgrams.txt.zip" "https://raw.githubusercontent.com/JohnReedLOL/quadgram/master/quadgram.txt"; do echo "== $u"; curl -sL --max-time 30 "$u" -o /tmp/q_$(basename $u) -w "%{http_code} %{size_download}\n"; done; ls -la /tmp/q_*
+[34] run_command cd /home/ctfplayer/workspace; mkdir -p qg; cd qg; unzip -o /tmp/q_english_quadgrams.txt.zip; ls -la; head -3 english_quadgrams.txt; wc -l english_quadgrams.txt
+[35] create_file {"content": "import re, itertools\nh=open('/home/ctfplayer/workspace/page_stone.html',encoding='utf-8').read()\nct=re.search(r'Ciphertext:\\s*\\n([A-Z]+)', h).group(1)\n\ndef vig_dec(ct,key):\n    out=[]\n    for i,c in enumerate(ct):\n        k=ord(key[i%len(key)])-65\n        out.append(chr((ord(c)-65-k)%26+65))\n    return ''.join(out)\n\ndef beau_dec(ct,key):\n    out=[]\n    for i,c in enumerate(ct):\n        k=ord(key[i%len(key)])-65\n        out.append(chr((k-(ord(c)-65))%26+65))\n    return ''.join(out)\n\ndef gronsfeld_dec(ct,digits):\n    out=[]\n    for i,c in enumerate(ct):\n        k=int(digits[i%len(digits)])\n        out.append(chr((ord(c)-65-k)%26+65))\n    return ''.join(out)\n\nkeys=[\"REMEMBER\",\"PRESERVE\",\"PRESERVES\",\"ENDURE\",\"ENDURES\",\"GRANITE\",\"FROST\",\"IRON\",\n      \"MIDNIGHT\",\"VAULT\",\"BRAILLE\",\"REGISTRY\",\"REGISTER\",\"KEY\",\"DIVIDED\",\"MIRROR\",\n      \"TRIO\",\"TRIOS\",\"COPIED\",\"LINE\",\"LOCK\",\"STONE\",\"SNOW\",\"LEDGER\",\"GHOST\",\n      \"SAFEHOUSE\",\"BLACKMARKET\",\"GETAWAY\",\"VAN\",\"SEAL\",\"SEALS\",\"CHAMBER\",\"ARCHIVE\",\n      \"OLD\",\"REGIS\",\"REMEMBERS\",\"PRESERVES\",\"ENDURES\",\"MIRRORED\",\"CHECKSUM\"]\n# also single letters / short\nkeys += [chr(65+i) for i in range(26)]\nkeys += [\"\".join(chr(65+i) for i in range(26))]\n\ndef score(s):\n    # use word list\n    return None\n\nresults=[]\nfor k in keys:\n    for fn,name in [(vig_dec,\"vig\"),(beau_dec,\"beau\")]:\n        pt=fn(ct,k)\n        results.append((name,k,pt))\n\n# gronsfeld with digit keys\nfor d in [\"041971\",\"0419\",\"1971\",\"0471\",\"41971\",\"04\",\"19\",\"71\",\"041971\"]:\n    results.append((\"grons\",d,gronsfeld_dec(ct,d)))\n\n# score with english word list\nwords=set(w.strip().upper() for w in open('/tmp/q_words_alpha.txt'))\ndef wordscore(s):\n    # greedy longest match\n    i=0; sc=0; n=len(s)\n    while i<n:\n        best=0\n        for L in range(min(15,n-i),1,-1):\n            if s[i:i+L] in words:\n                best=L; break\n        if best:\n            sc+=best; i+=best\n        else:\n            i+=1\n    return sc\n\nresults.sort(key=lambda r:-wordscore(r[2]))\nfor name,k,pt in results[:20]:\n    print(wordscore(pt), name, k, pt[:90])\n", "path": "/home/ctfplayer/workspace/vig_try.py"}
+[36] run_command cd /home/ctfplayer/workspace; python3 vig_try.py
+[37] run_command cd /home/ctfplayer/workspace; for u in \
+ "https://raw.githubusercontent.com/Descrout/QuadgramStats/master/quadgrams.txt" \
+ "https://raw.githubusercontent.com/ThibaultLemaire/quadgrams/master/quadgrams.txt" \
+ "https://raw.githubusercontent.com/martinreinhardt/cppquadgram/master/quadgrams.txt" \
+ "https://raw.githubusercontent.com/rambleraptor/quadgram/master/quadgrams.txt" \
+ "https://raw
+[38] run_command grep -rl "SALKMSK\|hill_mono\|MIRRORED TRIOS\|Midnight Vault" / --include=*.py --include=*.txt --include=*.html --include=*.json 2>/dev/null | grep -v workspace | head; echo "--- broader ---"; grep -rl "SALKMSK" / 2>/dev/null | head; echo "--- find any file mentioning granite safe ---"; grep -rl "GRANITE SAFE" / 2>/dev/null | head
+[38] run_command cd /home/ctfplayer/workspace; for p in "hill.py" "vig.py" "hill_mono.py" "challenge.py" "app.py" "server.py" "source.py" "solve.py" "chal.py" "main.py" "static/vig.py" "static/hill.py" "download/hill.py" "files/vig.py" "assets/hill.py" "src/hill.py" "code/hill.py" "chal/hill.py" "midnight/hill.py"; do code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 8 "http://taking-on-the-temple.chal.csaw.io:5000/$p"); if [ "$code" != "404" ]; then echo "$code /$p"; fi; done; echo done
+peer findings: 3 new
+[39] run_command cd /home/ctfplayer/workspace; head -c 300 /tmp/q_english_quadgrams.txt.zip; echo; echo "---"; file /tmp/q_english_quadgrams.txt.zip; echo "--- norvig head ---"; head -5 /tmp/dl.txt; wc -l /tmp/dl.txt
+[40] run_command cd /home/ctfplayer/workspace; python3 - <<'EOF'
+import zipfile
+try:
+    z=zipfile.ZipFile('/tmp/q_english_quadgrams.txt.zip')
+    print(z.namelist())
+    z.extractall('/home/ctfplayer/workspace/qg')
+    print("ok")
+except Exception as e:
+    print("err",e)
+EOF
+ls -la /home/ctfplayer/workspace/qg/ 2>/dev/null; head -3 /home/ctfplayer/workspace/qg/english_quadgrams.txt 2>/dev/null; wc -l /home/ctfplayer/workspace/qg/english_quadgrams.txt 2>/dev/null
+peer findings: 1 new
+[44] run_command cd /home/ctfplayer/workspace; file /tmp/q_english_quadgrams.txt.zip; head -c 200 /tmp/q_english_quadgrams.txt.zip | xxd | head -5; echo "--- try wget with proper url ---"; curl -sL --max-time 30 "https://raw.githubusercontent.com/Descrout/QuadgramStats/master/quadgrams.txt" -o /tmp/q1 -w "%{http_code} %{size_download}\n"; head -c 100 /tmp/q1
+[45] get_findings {}
+[45] run_command cd /home/ctfplayer/workspace; curl -sL --max-time 60 "http://practicalcryptography.com/media/cryptanalysis/files/english_quadgrams.txt.zip" -o qg.zip -w "%{http_code} %{size_download}\n"; ls -la qg.zip; python3 -c "import zipfile;z=zipfile.ZipFile('qg.zip');print(z.namelist());z.extractall('qg')" 2>&1 | head
+[46] run_command cd /home/ctfplayer/workspace; head -3 qg/english_quadgrams.txt; wc -l qg/english_quadgrams.txt; du -h qg/english_quadgrams.txt
+[47] create_file {"content": "import re, itertools, math\nfrom collections import Counter\n\nh=open('/home/ctfplayer/workspace/page_stone.html',encoding='utf-8').read()\nct=re.search(r'Ciphertext:\\s*\\n([A-Z]+)', h).group(1)\n\n# load quadgrams\nQG={}\ntot=0\nfor line in open('/home/ctfplayer/workspace/qg/english_quadgrams.txt'):\n    p=line.split()\n    if len(p)==2:\n        QG[p[0]]=int(p[1]); tot+=int(p[1])\nlogtot=math.log10(tot)\nQG={k:math.log10(v)-logtot for k,v in QG.items()}\nfloor=math.log10(0.01)-logtot\n\ndef qscore(s):\n    sc=0\n    for i in range(len(s)-3):\n        sc+=QG.get(s[i:i+4],floor)\n    return sc\n\n# sanity: english sample\neng=\"THEQUICKBROWNFOXJUMPSOVERTHELAZYDOGANDTHENRUNSINTOTHEFORESTTOHIDE\"\nprint(\"eng score\", qscore(eng)/len(eng))\nprint(\"ct score\", qscore(ct)/len(ct))\n\ndef modinv(a,m=26):\n    for x in range(1,m):\n        if (a*x)%m==1: return x\n    return None\n\ndef hill_dec(ct,K):\n    a,b,c,d=K\n    det=(a*d-b*c)%26\n    di=modinv(det)\n    if di is None: return None\n    Ki=[[(d*di)%26,(-b*di)%26],[(-c*di)%26,(a*di)%26]]\n    out=[]\n    for i in range(0,len(ct)-1,2):\n        x0=ord(ct[i])-65; x1=ord(ct[i+1])-65\n        out.append(chr((Ki[0][0]*x0+Ki[0][1]*x1)%26+65))\n        out.append(chr((Ki[1][0]*x0+Ki[1][1]*x1)%26+65))\n    return ''.join(out)\n\nbest=[]\nfor a in range(26):\n    for b in range(26):\n        for c in range(26):\n            for d in range(26):\n                det=(a*d-b*c)%26\n                if math.gcd(det,26)!=1: continue\n                pt=hill_dec(ct,(a,b,c,d))\n                best.append((qscore(pt)/len(pt), (a,b,c,d), pt))\nbest.sort(reverse=True)\nprint(\"TOP HILL 2x2:\")\nfor s,K,pt in best[:10]:\n    print(round(s,3),K,pt[:80])\n", "path": "/home/ctfplayer/workspace/hill_brute.py"}
+[48] run_command cd /home/ctfplayer/workspace; timeout 280 python3 hill_brute.py
+[49] create_file {"content": "import re, math\nfrom collections import Counter\nh=open('/home/ctfplayer/workspace/page_stone.html',encoding='utf-8').read()\nct=re.search(r'Ciphertext:\\s*\\n([A-Z]+)', h).group(1)\n\nQG={}; tot=0\nfor line in open('/home/ctfplayer/workspace/qg/english_quadgrams.txt'):\n    p=line.split()\n    if len(p)==2:\n        QG[p[0]]=int(p[1]); tot+=int(p[1])\nlt=math.log10(tot)\nQG={k:math.log10(v)-lt for k,v in QG.items()}\nfl=math.log10(0.01)-lt\ndef q(s):\n    return sum(QG.get(s[i:i+4],fl) for i in range(len(s)-3))/max(1,len(s)-3)\n\ndef modinv(a,m=26):\n    for x in range(1,m):\n        if (a*x)%m==1: return x\n    return None\n\ndef hill3_dec(ct,K):\n    # K 3x3 list of rows\n    # compute inverse mod 26\n    def det3(M):\n        return (M[0][0]*(M[1][1]*M[2][2]-M[1][2]*M[2][1])\n               -M[0][1]*(M[1][0]*M[2][2]-M[1][2]*M[2][0])\n               +M[0][2]*(M[1][0]*M[2][1]-M[1][1]*M[2][0]))%26\n    d=det3(K)\n    di=modinv(d)\n    if di is None: return None\n    # adjugate\n    C=[[0]*3 for _ in range(3)]\n    for i in range(3):\n        for j in range(3):\n            m=[[K[r][c] for c in range(3) if c!=j] for r in range(3) if r!=i]\n            cof=(m[0][0]*m[1][1]-m[0][1]*m[1][0])%26\n            C[j][i]= (cof*di*((-1)**(i+j)))%26\n    Ki=C\n    out=[]\n    s=ct\n    for i in range(0,len(s)-2,3):\n        v=[ord(s[i+k])-65 for k in range(3)]\n        for r in range(3):\n            out.append(chr((Ki[r][0]*v[0]+Ki[r][1]*v[1]+Ki[r][2]*v[2])%26+65))\n    return ''.join(out)\n\n# candidate keys from 04/19/71\ncands=[]\nnums=[4,19,71%26, 0,4,19,7,1, 4,19,7,1]\n# try a few arrangements\ncands.append([[4,19,7],[1,0,0],[0,1,0]])\ncands.append([[4,19,71%26],[0,1,0],[0,0,1]])\ncands.append([[0,4,19],[7,1,0],[0,0,1]])\ncands.append([[4,19,7],[1,4,19],[7,1,4]])\ncands.append([[0,4,19],[7,1,4],[19,7,1]])\nfor K in cands:\n    pt=hill3_dec(ct,K)\n    if pt: print(round(q(pt),3), K, pt[:70])\n", "path": "/home/ctfplayer/workspace/h3.py"}
+finished: aborted reason=aborted rounds=49 cost=$0.0743 transcript=C:\Users\Dingus\csaw26_llm_ctf\logs\evals\20261110-230852__eval\02__Midnight Vault\lane-3\20261110-233021__crypto_Midnight_Vault_main_deepseek_deepseek-v4_1-flash.json

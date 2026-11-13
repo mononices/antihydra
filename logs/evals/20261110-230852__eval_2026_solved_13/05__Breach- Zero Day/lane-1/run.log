@@ -1,0 +1,810 @@
+[01] run_command ls -la /home/ctfplayer/ctf_files/ && file /home/ctfplayer/ctf_files/* && wc -c /home/ctfplayer/ctf_files/*
+[01] run_command cat /tools.txt
+[02] run_command head -c 3000 /home/ctfplayer/ctf_files/fenwick_memdump.txt
+[02] run_command head -c 3000 /home/ctfplayer/ctf_files/fenwick_security.xml
+[03] run_command cd /home/ctfplayer/workspace && tshark -r /home/ctfplayer/ctf_files/fenwick_capture.pcap -nn 2>/dev/null | head -50; echo ===; tshark -r /home/ctfplayer/ctf_files/fenwick_capture.pcap -nn -T fields -e ip.src -e ip.dst -e _ws.col.Protocol -e _ws.col.Info 2>/dev/null | awk -F'\t' '{print $1" -> "$2" ["$3"]"}' | sort | uniq -c | sort -rn | head -40
+[03] run_command cd /home/ctfplayer/ctf_files && grep -o '<EventID>[0-9]*</EventID>' fenwick_security.xml | sort | uniq -c | sort -rn; echo ===; grep -c '<Event ' fenwick_security.xml
+[04] run_command cd /home/ctfplayer/workspace && tshark -r /home/ctfplayer/ctf_files/fenwick_capture.pcap -Y http -T fields -e frame.number -e http.request.full_uri -e http.user_agent -e http.host 2>/dev/null | sort -u -t$'\t' -k2 | head -40
+[04] run_command cd /home/ctfplayer/ctf_files && python3 - <<'EOF'
+import re
+data=open('fenwick_security.xml').read()
+evs=re.findall(r'<Event .*?</Event>', data, re.S)
+print(len(evs))
+from collections import Counter
+c=Counter()
+for e in evs:
+    eid=re.search(r'<EventID>(\d+)</EventID>',e).group(1)
+    prov=re.search(r'<Provider Name="([^"]*)"',e)
+    c[(eid,prov.group(1) if prov else '?')]+=1
+for k,v in c.most_common(): print(k,v)
+EOF
+[05] run_command cd /home/ctfplayer/workspace && tshark -r /home/ctfplayer/ctf_files/fenwick_capture.pcap -Y http -T fields -e http.host 2>/dev/null | sort | uniq -c | sort -rn; echo === DNS ===; tshark -r /home/ctfplayer/ctf_files/fenwick_capture.pcap -Y "dns.flags.response==0" -T fields -e dns.qry.name 2>/dev/null | sort | uniq -c | sort -rn
+[05] run_command cd /home/ctfplayer/workspace && tshark -r /home/ctfplayer/ctf_files/fenwick_capture.pcap -Y "http.request.method==\"POST\"" -T fields -e frame.number -e http.host -e http.request.uri 2>/dev/null | sort | uniq -c -f2 | head; echo === sample POSTs ===; tshark -r /home/ctfplayer/ctf_files/fenwick_capture.pcap -Y "http.request.method==\"POST\"" -T fields -e frame.number -e http.host -e http.request.uri -e http.file_data 2>/dev/null | head -8
+[06] run_command cd /home/ctfplayer/workspace && tshark -r /home/ctfplayer/ctf_files/fenwick_capture.pcap -Y "http.host==\"docs-fenwick-portal.com\" || http.host==\"backup-vault.fenwick.local\"" -T fields -e frame.number -e ip.dst -e http.host -e http.request.uri -e http.file_data -e http.response.code -e http.file_data 2>/dev/null; echo === full follow ===; tshark -r /home/ctfplayer/ctf_files/fenwick_capture.pcap -Y "frame.number==2060 || frame.number==2061 || frame.number==2062 || frame.number==2063 || frame.number==2064 || frame.number==2452 || frame.number==2453 || frame.number==2454 || frame.number==2455 || frame.number==2456" -T fields -e frame.number -e ip.src -e ip.dst -e _ws.col.Info 2>/dev/null
+[06] run_command cd /home/ctfplayer/ctf_files && python3 - <<'EOF'
+import re
+data=open('fenwick_security.xml').read()
+evs=re.findall(r'<Event .*?</Event>', data, re.S)
+for e in evs:
+    if '<EventID>7045</EventID>' in e:
+        print(e)
+        break
+EOF
+[07] run_command cd /home/ctfplayer/ctf_files && python3 - <<'EOF'
+import re
+from collections import Counter
+data=open('fenwick_security.xml').read()
+evs=re.findall(r'<Event .*?</Event>', data, re.S)
+c=Counter(); rows=[]
+for e in evs:
+    if '<EventID>7045</EventID>' in e:
+        n=lambda k: (re.search(r'<Data Name="%s">(.*?)</Data>'%k, e) or [None,'?'])[1]
+        sn,ip,st,ac=n('ServiceName'),n('ImagePath'),n('StartType'),n('AccountName')
+        t=re.search(r'SystemTime="([^"]*)"',e).group(1)
+        c[(sn,ip,st,ac)]+=1
+        rows.append((t,sn,ip))
+for k,v in c.most_common(): print(v,k)
+print('---first/last few rows---')
+for r in rows[:5]: print(r)
+print('...')
+for r in rows[-5:]: print(r)
+EOF
+[07] run_command cd /home/ctfplayer/ctf_files && grep -inE 'relay|backdoor|c2|beacon|implant|shell|fenwick-portal|backup-vault|10\.14\.0\.9|heartbeat|docs-fenwick' fenwick_memdump.txt | head -60
+[08] run_command cd /home/ctfplayer/ctf_files && python3 - <<'EOF'
+import re
+lines=open('fenwick_memdump.txt').read().splitlines()
+print("total lines:",len(lines))
+# classify lines: those that don't look like normal windows paths/registry/api
+import collections
+pat=re.compile(r'^(?:(?:C:\\|\\\\|[A-Z]:\\)|HKEY_|https?://|Software\\\\|[A-Za-z0-9_.]+\\.(?:dll|exe|sys|pf|mui|ttf|xml|dll$))')
+susp=[]
+for l in lines:
+    parts=l.split(' ',1)
+    addr, s = (parts[0], parts[1] if len(parts)>1 else '')
+    if re.match(r'^[0-9a-f]{8,16}$', addr) is None: continue
+    # heuristics for interesting
+    if re.search(r'(https?://|\.com|\.net|\.local|\.ru|\.xyz|\.top|\.info)', s) or \
+       re.search(r'(?i)(backdoor|implant|c2|beacon|relay|shell|agent|bkup|backup|afd|eop|payload|pipe|mutex|svc|service|driver|module|update|task)', s) or \
+       re.match(r'^[A-Za-z0-9+/=_,-]{8,}$', s):
+        susp.append(l)
+print("suspicious count:",len(susp))
+for l in susp[:120]: print(l)
+EOF
+[08] run_command cd /home/ctfplayer/workspace && tshark -r /home/ctfplayer/ctf_files/fenwick_capture.pcap -Y "dns" -T fields -e frame.number -e dns.qry.name -e dns.qry.type -e dns.a -e dns.txt -e dns.resp.name 2>/dev/null | grep -iE 'cloudflare|fenwick|\.com|\.net' | sort -u | head -50
+[09] run_command cd /home/ctfplayer/workspace && tshark -r /home/ctfplayer/ctf_files/fenwick_capture.pcap -Y "dns.flags.response==1" -T fields -e dns.qry.name -e dns.a 2>/dev/null | sort -u; echo === SNI ===; tshark -r /home/ctfplayer/ctf_files/fenwick_capture.pcap -Y "tls.handshake.extensions_server_name" -T fields -e tls.handshake.extensions_server_name 2>/dev/null | sort | uniq -c | sort -rn
+[09] run_command cd /home/ctfplayer/ctf_files && grep -inE 'afd|bkup|eludom|module|driver|\.sys|pipe|\\\\\\.\\pipe|svchost -k|netsvcs|Global\\|Local\\' fenwick_memdump.txt | grep -viE 'shell32|msvcrt|user32|ole32|oleaut|ntdll|kernel32|advapi|ws2_32|wininet|wintrust|propsys|sechost|shcore|userenv|dnsapi|netio|tcpip|afd\.sys$|flt|clus|stor|hal\.|ndis' | head -60
+[10] run_command cd /home/ctfplayer/workspace && tshark -r /home/ctfplayer/ctf_files/fenwick_capture.pcap -q -z conv,tcp 2>/dev/null | head -40; echo === TLS conv ===; tshark -r /home/ctfplayer/ctf_files/fenwick_capture.pcap -Y "tls" -T fields -e ip.dst -e tcp.dstport 2>/dev/null | sort | uniq -c | sort -rn | head
+[10] run_command cd /home/ctfplayer/ctf_files && grep -inE 'cloudflare|fenwick-portal|backup-vault|10\.14\.0\.9|52\.[0-9]+\.[0-9]+\.[0-9]+|8443|https?://' fenwick_memdump.txt | grep -viE 'microsoft|office365|digicert|windowsupdate|live\.com|msn\.com' | head -40
+[11] run_command cd /home/ctfplayer/workspace && tshark -r /home/ctfplayer/ctf_files/fenwick_capture.pcap -Y "http.request" -T fields -e frame.number -e frame.time_relative -e http.host -e http.request.uri -e http.user_agent 2>/dev/null | awk -F'\t' '{print $2, $3, $4, $5}' | head -30; echo === full request text ===; tshark -r /home/ctfplayer/ctf_files/fenwick_capture.pcap -Y "frame.number==2454 || frame.number==2062 || frame.number==4" -x 2>/dev/null | head -80
+[11] run_command cd /home/ctfplayer/workspace && tshark -r /home/ctfplayer/ctf_files/fenwick_capture.pcap -Y "tcp.flags.syn==1 && tcp.flags.ack==0 && tcp.dstport==443" -T fields -e frame.time_relative -e ip.dst 2>/dev/null | sort -k2 | awk '{a[$2]=a[$2]" "$1} END {for (k in a) print k, a[k]}' | grep 198.39; echo; tshark -r /home/ctfplayer/ctf_files/fenwick_capture.pcap -Y "tcp.flags.syn==1 && tcp.flags.ack==0 && tcp.dstport==8443" -T fields -e frame.time_relative 2>/dev/null | head -90 | tr '\n' ' '
+[12] run_command cd /home/ctfplayer/ctf_files && python3 - <<'EOF'
+import re
+from collections import Counter
+data=open('fenwick_security.xml').read()
+evs=re.findall(r'<Event .*?</Event>', data, re.S)
+c=Counter()
+for e in evs:
+    if '<EventID>7045</EventID>' in e:
+        n=lambda k: (re.search(r'<Data Name="%s">(.*?)</Data>'%k, e) or [None,'?'])[1]
+        c[(n('ServiceName'),n('ImagePath'),n('ServiceType'),n('StartType'),n('AccountName'))]+=1
+for k,v in sorted(c.items(), key=lambda x:-x[1]):
+    print(v,'|', ' | '.join(k))
+EOF
+[12] run_command cd /home/ctfplayer/ctf_files && grep -n 'ELUDOMDUF' fenwick_memdump.txt; echo ---; sed -n '1435,1495p' fenwick_memdump.txt
+[13] run_command cd /home/ctfplayer/ctf_files && python3 - <<'EOF'
+import re
+lines=open('fenwick_memdump.txt').read().splitlines()
+words=['module','shell','backdoor','door','agent','beacon','implant','relay','svc','service','driver','update','backup','bkup','afd','eop','c2','http','pipe','crypt','mutex','toulouse','fenwick','wks047','d.reyes','graph','token','priv','cred','dump','mimik','keylog','screen','exfil','stage','persist','run','task','sched']
+hits=[]
+for i,l in enumerate(lines):
+    parts=l.split(' ',1)
+    s = parts[1] if len(parts)>1 else ''
+    rev=s[::-1].lower()
+    for w in words:
+        if w in rev and w not in s.lower():
+            hits.append((i+1,l,'REV:'+w))
+        if w in s.lower() and len(s)>4 and not re.search(r'[\\/]', s):
+            hits.append((i+1,l,'FWD:'+w))
+for h in hits: print(h)
+EOF
+[14] run_command cd /home/ctfplayer/workspace && tshark -r /home/ctfplayer/ctf_files/fenwick_capture.pcap -q -z io,phs 2>/dev/null | head -30; echo === responses ===; tshark -r /home/ctfplayer/ctf_files/fenwick_capture.pcap -Y "http.response" -T fields -e frame.number -e http.response.code -e http.file_data 2>/dev/null | sort -u -k2 | head -20
+[14] run_command cd /home/ctfplayer/ctf_files && grep -icE 'bkupagent|afd4eop|heartbeat|8443|portal|vault|relay' fenwick_memdump.txt; grep -inE 'bkupagent|afd4eop|heartbeat|8443|portal|vault|relay' fenwick_memdump.txt | head; echo === freq ===; python3 - <<'EOF'
+from collections import Counter
+import re
+lines=open('fenwick_memdump.txt').read().splitlines()
+c=Counter()
+for l in lines:
+    p=l.split(' ',1)
+    if len(p)>1: c[p[1]]+=1
+print("unique strings:",len(c))
+# strings appearing 2-9 times, not typical windows stuff
+for s,n in c.most_common():
+    if 2<=n<=9 and not re.search(r'(dll|exe|\.sys|HKEY|Microsoft|Windows|Privilege|Api|STATUS_|ERROR_|kernel|Temp|INetCache)', s, re.I):
+        print(n, repr(s))
+EOF
+[15] run_command cd /home/ctfplayer/ctf_files && python3 - <<'EOF'
+import re
+from collections import defaultdict, Counter
+data=open('fenwick_security.xml').read()
+evs=re.findall(r'<Event .*?</Event>', data, re.S)
+vals=defaultdict(Counter)
+for e in evs:
+    eid=re.search(r'<EventID>(\d+)</EventID>',e).group(1)
+    prov=re.search(r'<Provider Name="([^"]*)"',e)
+    key=(eid, prov.group(1) if prov else '?')
+    for m in re.finditer(r'<Data Name="([^"]*)">(.*?)</Data>', e, re.S):
+        vals[(key,m.group(1))][m.group(2)]+=1
+    # also EventData without Name
+for k in sorted(vals, key=str):
+    items=vals[k]
+    if len(items)<=14:
+        print(k, dict(items))
+    else:
+        print(k, 'COUNT', len(items), 'top:', items.most_common(8))
+EOF
+[17] check_hints {}
+[17] run_command cd /home/ctfplayer/ctf_files && python3 - <<'EOF'
+import re
+data=open('fenwick_security.xml').read()
+evs=re.findall(r'<Event .*?</Event>', data, re.S)
+for e in evs:
+    t=re.search(r'SystemTime="([^"]*)"',e).group(1)
+    eid=re.search(r'<EventID>(\d+)</EventID>',e).group(1)
+    if '<EventID>7045</EventID>' in e:
+        n=lambda k: (re.search(r'<Data Name="%s">(.*?)</Data>'%k, e) or [None,'?'])[1]
+        if 'kernel' in n('ServiceType'):
+            print('7045-KERNEL', t, n('ServiceName'), n('ImagePath'))
+    if 'NightlyBackup' in e:
+        print(eid, t, re.findall(r'<Data Name="([^"]*)">(.*?)</Data>', e))
+    if '<EventID>3008</EventID>' in e and 'backup-vault' in e:
+        print('DNS3008', t)
+EOF
+[18] run_command cd /home/ctfplayer/workspace && tshark -r /home/ctfplayer/ctf_files/fenwick_capture.pcap -q -z conv,tcp 2>/dev/null | awk '{print $1}' | grep -oE '52\.[0-9]+\.[0-9]+\.[0-9]+' | sort | uniq -c | sort -rn; echo === dns-only hosts ===; for h in cdn.cloudflare.net api.slack.com time.windows.com www.office.com; do echo -n "$h: "; tshark -r /home/ctfplayer/ctf_files/fenwick_capture.pcap -Y "ip.dst==$(tshark -r /home/ctfplayer/ctf_files/fenwick_capture.pcap -Y "dns.flags.response==1 && dns.qry.name==\"$h\"" -T fields -e dns.a 2>/dev/null | head -1)" 2>/dev/null | wc -l; done
+[19] run_command cd /home/ctfplayer/workspace && tshark -r /home/ctfplayer/ctf_files/fenwick_capture.pcap -T fields -e ip.dst 2>/dev/null | grep -v '^10\.14\.0\.53$' | sort | uniq -c | sort -rn | head -25
+[20] run_command cd /home/ctfplayer/ctf_files && python3 - <<'EOF'
+import re
+lines=open('fenwick_memdump.txt').read().splitlines()
+# reverse strings that look like concatenated words when reversed
+import textwrap
+cands=[]
+for l in lines:
+    p=l.split(' ',1)
+    if len(p)<2: continue
+    s=p[1]
+    if re.fullmatch(r'[A-Z_]{6,}', s):
+        cands.append((l, s, s[::-1].lower()))
+for c in cands: print(c)
+EOF
+[20] run_command cd /home/ctfplayer/ctf_files && grep -nE 'AncillaryDynamics' fenwick_memdump.txt | head -3; echo ---; grep -c 'AncillaryDynamics_TechnicalAssessment' fenwick_memdump.txt; echo --- context ---; grep -n 'AncillaryDynamics_TechnicalAssessment' fenwick_memdump.txt | head -2 | cut -d: -f1 | while read n; do sed -n "$((n-2)),$((n+2))p" fenwick_memdump.txt; echo ....; done
+[21] run_command cd /home/ctfplayer/ctf_files && python3 - <<'EOF'
+import re
+words=set()
+try:
+    words={w.strip().lower() for w in open('/usr/share/dict/words') if len(w.strip())>=4}
+except FileNotFoundError:
+    pass
+extra={'fudmodule','copperhedge','forest','lazarus','diamond','sleet','blizzard','midnight','silk','typhoon','panda','bear','kitten','crane','hedge','copper','backdoor','rootkit','beacon','implant','stager','dropper','loader','toulouse','fenwick','reyes','heartbeat','relay','shell','vault','portal','agent','bkup','afd','eop','nightly','inventory','sync','telemetry','slack','github','cloudflare'}
+words |= extra
+lines=open('fenwick_memdump.txt').read().splitlines()
+seen=set()
+for l in lines:
+    p=l.split(' ',1)
+    if len(p)<2: continue
+    s=p[1]
+    r=s[::-1]
+    for tok in re.findall(r'[A-Za-z_]{4,}', r):
+        t=tok.lower().strip('_')
+        if t in words and (l,t) not in seen:
+            seen.add((l,t))
+            print(l, '->', r, '->', t)
+EOF
+[22] run_command cd /home/ctfplayer/workspace && tshark -r /home/ctfplayer/ctf_files/fenwick_capture.pcap -Y "http" -T fields -e frame.number -e http.request.line -e http.response.line 2>/dev/null | head -6; echo ====; tshark -r /home/ctfplayer/ctf_files/fenwick_capture.pcap -Y "frame.number==2454" -x 2>/dev/null | head -30
+[22] run_command cd /home/ctfplayer/ctf_files && python3 - <<'EOF'
+import re
+from collections import Counter, defaultdict
+data=open('fenwick_security.xml').read()
+evs=re.findall(r'<Event .*?</Event>', data, re.S)
+# RDP 21/24 and 4624 anomalies
+for e in evs:
+    if '<EventID>21</EventID>' in e or '<EventID>24</EventID>' in e:
+        d=dict(re.findall(r'<Data Name="([^"]*)">(.*?)</Data>', e))
+        t=re.search(r'SystemTime="([^"]*)"',e).group(1)
+        print(eid if False else '', t, d)
+        break
+vals=defaultdict(Counter)
+for e in evs:
+    eid=re.search(r'<EventID>(\d+)</EventID>',e).group(1)
+    if eid in ('21','24','4624'):
+        for m in re.finditer(r'<Data Name="([^"]*)">(.*?)</Data>', e):
+            vals[(eid,m.group(1))][m.group(2)]+=1
+for k,v in sorted(vals.items(), key=str):
+    print(k, 'uniq',len(v), v.most_common(6))
+EOF
+[23] run_command cd /home/ctfplayer/workspace && echo "=== 52.208.116.222 traffic ==="; tshark -r /home/ctfplayer/ctf_files/fenwick_capture.pcap -Y "ip.addr==52.208.116.222" -T fields -e frame.number -e frame.time_relative -e ip.src -e tcp.dstport -e _ws.col.Info 2>/dev/null | head -20; echo "=== 52.112.198.39 sample ==="; tshark -r /home/ctfplayer/ctf_files/fenwick_capture.pcap -Y "ip.addr==52.112.198.39 && tls" -T fields -e frame.number -e frame.time_relative -e tls.record.content_type -e tls.handshake.type 2>/dev/null | head -12
+[24] run_command cd /home/ctfplayer/workspace && capinfos /home/ctfplayer/ctf_files/fenwick_capture.pcap 2>/dev/null | head -12; echo === key frame times ===; tshark -r /home/ctfplayer/ctf_files/fenwick_capture.pcap -Y "frame.number==2062 || frame.number==2454 || frame.number==203 || frame.number==2464 || frame.number==4" -T fields -e frame.number -e frame.time_epoch -e frame.time_relative 2>/dev/null
+[24] run_command cd /home/ctfplayer/ctf_files && python3 - <<'EOF'
+import re
+from collections import Counter, defaultdict
+data=open('fenwick_security.xml').read()
+evs=re.findall(r'<Event .*?</Event>', data, re.S)
+vals=defaultdict(Counter)
+for e in evs:
+    eid=re.search(r'<EventID>(\d+)</EventID>',e).group(1)
+    if eid=='5157':
+        for m in re.finditer(r'<Data Name="([^"]*)">(.*?)</Data>', e):
+            vals[m.group(1)][m.group(2)]+=1
+for k,v in sorted(vals.items(), key=str):
+    print(k,'uniq',len(v), v.most_common(10))
+EOF
+[25] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import struct, datetime
+f=open('/home/ctfplayer/ctf_files/fenwick_capture.pcap','rb').read()
+# global header 24 bytes
+n=0
+off=24
+times=[]
+while off < len(f):
+    ts_s, ts_us, incl, orig = struct.unpack('<IIII', f[off:off+16])
+    t=datetime.datetime.utcfromtimestamp(ts_s+ts_us/1e6)
+    times.append((n,t))
+    off += 16+incl
+    n+=1
+print("packets:",n)
+# print every 300th packet timestamp
+for i in range(0,n,300):
+    print(i, times[i][1].strftime('%Y-%m-%d %H:%M:%S.%f'))
+print("last:", times[-1][1].strftime('%Y-%m-%d %H:%M:%S.%f'))
+# key frames
+for idx in (3,202,2061,2453,2463):
+    print(idx+1, times[idx][1].strftime('%Y-%m-%d %H:%M:%S.%f'))
+EOF
+[26] run_command cd /home/ctfplayer/ctf_files && for pat in 'poe4dfa' '46tnega' 'tnegapukb' 'llehsyaler' 'kcab' 'kcabd' 'eludom' 'duf' 'tserof' 'egdehrep' 'pocreh'; do echo -n "$pat: "; grep -icE "$pat" fenwick_memdump.txt; done; echo ---; grep -inE 'poe4dfa|46tnega|tnegapukb|llehsyaler' fenwick_memdump.txt | head
+[26] run_command cd /home/ctfplayer/ctf_files && grep -n -B3 -A3 'EGDEHREPPOC' fenwick_memdump.txt; echo =====; grep -n -B3 -A3 'TSEROF' fenwick_memdump.txt
+[27] run_command cd /home/ctfplayer/workspace && tshark -r /home/ctfplayer/ctf_files/fenwick_capture.pcap -Y "ip.src==10.14.0.9 && http.response" -T fields -e frame.number -e http.file_data 2>/dev/null | sort -u -k2 | head; echo === raw bytes of a response ===; tshark -r /home/ctfplayer/ctf_files/fenwick_capture.pcap -Y "frame.number==6" -x 2>/dev/null; echo === 52.112.198.39 response ===; tshark -r /home/ctfplayer/ctf_files/fenwick_capture.pcap -Y "frame.number==2456 || frame.number==2064" -x 2>/dev/null | head -40
+[28] publish_insight {"text": "CSAW Breach: Zero Day \u2014 pcap: FNW-WKS047 (10.14.22.47) beacons every ~300s to 10.14.0.9:8443 GET /heartbeat (UA Microsoft-Delivery-Optimization/10.0, resp {\"ack\":true}); POSTs /api/sync with base64 ids: BACKUPSVC->backup-vault.fenwick.local (23:58) and RELAYSHELL->docs-fenwick-portal.com (01:14, external typosquat, 439 frames + 72 TLS beacons ~250s from 01:14 on). XML anomalies: 7045 BkupAgent64 (drivers\\BkupAgent64.sys, demand) at 23:58:43 after \\Fenwick\\Backup\\NightlyBackup task; 7045 Afd4Eop12 (drivers\\Afd4Eop12_x64.dll, kernel) at 01:14:15. Memdump hides reversed words: ELUDOMDUF=FUDMODULE, EGDEHREPPOC=COPPERHEDGE, TSEROF=FOREST (Lazarus APT names; FudModule is an AFD-driver rootkit).", "kind": "fact"}
+[28] run_command cd /home/ctfplayer/ctf_files && grep -n -B4 -A4 'ELUDOMDUF' fenwick_memdump.txt
+[29] run_command cd /home/ctfplayer/ctf_files && python3 - <<'EOF'
+import re
+words={w.strip().lower() for w in open('/usr/share/dict/words') if len(w.strip())>=4} if __import__('os').path.exists('/usr/share/dict/words') else set()
+extra={'fudmodule','copperhedge','forest','lazarus','backdoor','rootkit','beacon','implant','heartbeat','relay','shell','vault','portal','agent','nightly','inventory','toulouse','fenwick','reyes','driver','module','service'}
+words|=extra
+lines=open('fenwick_memdump.txt').read().splitlines()
+seen=set()
+for l in lines:
+    p=l.split(' ',1)
+    if len(p)<2: continue
+    s=p[1]
+    r=s[::-1]
+    for tok in re.findall(r'[A-Za-z_]{4,}', r):
+        t=tok.lower().strip('_')
+        if t in words and (l,t) not in seen:
+            seen.add((l,t)); print(l,'->',r,'->',t)
+# also rot13 check
+import codecs
+for l in lines:
+    p=l.split(' ',1)
+    if len(p)<2: continue
+    s=p[1]
+    if re.fullmatch(r'[A-Za-z_]{6,}', s):
+        rot=codecs.encode(s,'rot13').lower()
+        if rot in words: print('ROT13:',l,rot)
+EOF
+[29] run_command cd /home/ctfplayer/ctf_files && python3 - <<'EOF'
+import re
+from collections import Counter
+data=open('fenwick_security.xml').read()
+evs=re.findall(r'<Event .*?</Event>', data, re.S)
+# all TaskName values
+tn=Counter(); un=Counter()
+for e in evs:
+    for m in re.finditer(r'<Data Name="TaskName">(.*?)</Data>', e): tn[m.group(1)]+=1
+    for m in re.finditer(r'<Data Name="User">(.*?)</Data>', e): un[m.group(1)]+=1
+print("TASKS:"); [print(' ',v,k) for k,v in tn.most_common()]
+print("USERS:"); [print(' ',v,k) for k,v in un.most_common()]
+EOF
+[31] run_command cd /home/ctfplayer/ctf_files && python3 - <<'EOF'
+import re
+from collections import Counter
+data=open('fenwick_security.xml').read()
+evs=re.findall(r'<Event .*?</Event>', data, re.S)
+# All unique ImagePath strings across ALL events (not just 7045)
+ips=Counter()
+for e in evs:
+    for m in re.finditer(r'<Data Name="(?:ImagePath|CommandLine|ProcessName|Application Name|ExecutablePath)">([^<]*)</Data>', e):
+        ips[m.group(1)]+=1
+for k,v in ips.most_common(40): print(v,k)
+EOF
+[32] run_command cd /home/ctfplayer/ctf_files && python3 - <<'EOF'
+import re
+from collections import Counter
+data=open('fenwick_security.xml').read()
+names=Counter(re.findall(r'<Data Name="([^"]*)"', data))
+print("ALL Data Name attrs:")
+for k,v in names.most_common(): print(f'  {v:5d} {k}')
+noname=len(re.findall(r'<Data>(?!.*Name)', data))
+print("Data without Name:", noname)
+print("Other tags:", set(re.findall(r'<([A-Z][A-Za-z]+)[ >]', data)))
+EOF
+[32] run_command cd /home/ctfplayer/ctf_files && grep -nE '^[0-9a-f]+ [A-Za-z0-9_]{1,10}=' fenwick_memdump.txt | head -20; echo ---; grep -cE '^[0-9a-f]+ [A-Za-z0-9_+/=-]{20,}$' fenwick_memdump.txt
+peer findings: 1 new
+[33] run_command cd /home/ctfplayer/workspace && mkdir -p cabs && tshark -r /home/ctfplayer/ctf_files/fenwick_capture.pcap -Y "http.response && http.content_type contains \"cab\"" -T fields -e frame.number -e http.response.uri -e http.file_data 2>/dev/null | head -12; echo === export ===; tshark -r /home/ctfplayer/ctf_files/fenwick_capture.pcap --export-objects http,cabs -q 2>/dev/null; ls -la cabs | head -20; for f in cabs/*; do echo "== $f $(stat -c%s $f)"; xxd "$f" | head -3; done 2>/dev/null | head -60
+[34] run_command cd /home/ctfplayer/workspace/cabs && ls | sed 's/(.*)//' | sort | uniq -c; echo ===; ls | grep -v heartbeat | head -20; echo "=== sizes of non-heartbeat ==="; ls | grep -v heartbeat | while read f; do echo "$f $(stat -c%s "$f")"; done | head
+[35] run_command cd /home/ctfplayer/workspace/cabs && for f in sync sync(1) sync(2) sync(3); do echo "== $f"; cat "$f"; echo; done; echo === pkg entropy check ===; python3 - <<'EOF'
+import os, math, collections
+for fn in sorted(os.listdir('.')):
+    if not fn.startswith('pkg_'): continue
+    d=open(fn,'rb').read()
+    c=collections.Counter(d)
+    ent=-sum(v/len(d)*math.log2(v/len(d)) for v in c.values())
+    print(fn, len(d), 'entropy %.2f'%ent, d[:16].hex())
+EOF
+[36] run_command cd /home/ctfplayer/workspace/cabs && for f in sync 'sync(1)' 'sync(2)' 'sync(3)'; do echo "== $f"; cat "$f"; echo; done; echo === pkg entropy ===; python3 - <<'EOF'
+import os, math, collections
+for fn in sorted(os.listdir('.')):
+    if not fn.startswith('pkg_'): continue
+    d=open(fn,'rb').read()
+    c=collections.Counter(d)
+    ent=-sum(v/len(d)*math.log2(v/len(d)) for v in c.values())
+    print(fn, len(d), 'entropy %.2f'%ent, d[:16].hex())
+EOF
+[38] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import os, collections, math, string
+chars = string.ascii_letters + string.digits + '+/=' + ',-_.'
+best={}
+for fn in sorted(os.listdir('cabs')):
+    if not fn.startswith('pkg_'): continue
+    d=open('cabs/'+fn,'rb').read()
+    scores=[]
+    for k in range(256):
+        dec=bytes(b^k for b in d)
+        frac=sum(c in chars for c in dec)/len(dec)
+        scores.append((frac,k))
+    scores.sort(reverse=True)
+    best[fn]=scores[:3]
+    print(fn, [(round(f,3),k) for f,k in scores[:3]])
+# try the best keys
+print('--- decoded samples ---')
+for fn,(top,_) in best.items():
+    f,k=top
+    dec=bytes(b^k for b in open('cabs/'+fn,'rb').read())
+    print(fn,'key',k, dec[:64])
+EOF
+[39] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import os, string
+chars = set(string.ascii_letters + string.digits + '+/=' + ',-_."{}: ')
+best={}
+for fn in sorted(os.listdir('cabs')):
+    if not fn.startswith('pkg_'): continue
+    d=open('cabs/'+fn,'rb').read()
+    scores=[]
+    for k in range(256):
+        dec=bytes(b^k for b in d)
+        frac=sum(c in chars for c in dec)/len(dec)
+        scores.append((frac,k))
+    scores.sort(reverse=True)
+    best[fn]=scores[:3]
+    print(fn, [(round(f,3),k) for f,k in scores[:3]])
+print('--- decoded samples ---')
+for fn in best:
+    f,k=best[fn][0]
+    dec=bytes(b^k for b in open('cabs/'+fn,'rb').read())
+    print(fn,'key',k, dec[:80])
+EOF
+[40] publish_insight {"text": "pkg_*.cab files from printserver/fileshare-toulouse/download.windowsupdate are pure random-byte decoys: entropy 7.1-7.8, no MSCF magic, and single-byte XOR brute force yields 0% printable chars for all 256 keys. No hidden payload there. Flag mapping stands: C2=docs-fenwick-portal.com (52.112.198.39, RELAYSHELL /api/sync + 72 TLS beacons @~250s from 01:14-05:59), service=Afd4Eop12 (C:\\Windows\\System32\\drivers\\Afd4Eop12_x64.dll, kernel, 01:14:15), backdoor=FUDMODULE (reversed ELUDOMDUF in memdump next to 'Error in module %s'; Afd registry keys + afd.sys corroborate FudModule AFD-rootkit).", "kind": "deadend"}
+[41] submit_flag {"flag": "csaw{docs-fenwick-portal.com_Afd4Eop12_FUDMODULE}"}
+[42] run_command cd /home/ctfplayer/workspace && for ip in 52.112.198.39 52.208.116.222 52.227.58.230 52.62.1.158 52.54.102.65 10.14.0.9; do echo "== $ip"; tshark -r /home/ctfplayer/ctf_files/fenwick_capture.pcap -Y "ip.addr==$ip" -T fields -e frame.time_relative -e tcp.stream 2>/dev/null | awk '{print $2}' | sort -un | wc -l; done; echo === streams per IP with first/last time ===; tshark -r /home/ctfplayer/ctf_files/fenwick_capture.pcap -Y "tcp.flags.syn==1 && tcp.flags.ack==0" -T fields -e frame.time_relative -e ip.dst -e tcp.dstport 2>/dev/null | awk '{c[$2"|"$3]++; t[$2"|"$3]=t[$2"|"$3]" "$1} END {for (k in c) print c[k], k, t[k]}' | sort -rn | head -25
+[43] run_command cd /home/ctfplayer/workspace && echo "=== full DNS name->IP map ==="; tshark -r /home/ctfplayer/ctf_files/fenwick_capture.pcap -Y "dns.flags.response==1" -T fields -e dns.qry.name -e dns.a 2>/dev/null | sort -u; echo "=== which name resolves to 52.208.116.222? ==="; tshark -r /home/ctfplayer/ctf_files/fenwick_capture.pcap -Y "dns.a==52.208.116.222" 2>/dev/null | head -3; echo "=== TLS client hellos to the two suspects ==="; tshark -r /home/ctfplayer/ctf_files/fenwick_capture.pcap -Y "tls.handshake.type==1" -T fields -e ip.dst -e tls.handshake.extensions_server_name -e tls.handshake.ciphersuite 2>/dev/null | sort | uniq -c | sort -rn | head -25
+[44] run_command cd /home/ctfplayer/workspace && tshark -r /home/ctfplayer/ctf_files/fenwick_capture.pcap -Y "ip.addr==52.208.116.222 && tls" -x 0 2>/dev/null | head -60; echo === which IPs get TLS client hellos ===; tshark -r /home/ctfplayer/ctf_files/fenwick_capture.pcap -Y "tls.handshake" -T fields -e ip.dst -e tls.handshake.type 2>/dev/null | sort | uniq -c | sort -rn | head -20
+[45] run_command cd /home/ctfplayer/workspace && tshark -r /home/ctfplayer/ctf_files/fenwick_capture.pcap -Y "frame.number==206" -x 2>/dev/null; echo ===; tshark -r /home/ctfplayer/ctf_files/fenwick_capture.pcap -Y "frame.number==208" -x 2>/dev/null | head -20
+[46] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import subprocess, struct
+out = subprocess.run(['tshark','-r','/home/ctfplayer/ctf_files/fenwick_capture.pcap','-Y','ip.addr==52.208.116.222 && tcp.len>0','-T','fields','-e','frame.number','-e','ip.src','-e','tcp.payload','-e','frame.time_relative'],capture_output=True,text=True).stdout
+rows=[l.split('\t') for l in out.strip().split('\n')]
+clients=[]
+for num,src,pay,t in rows:
+    p=bytes.fromhex(pay.replace(':',''))
+    print(num,src,len(p),t,p[:24].hex())
+    if src=='10.14.22.47': clients.append((int(t),p))
+# compare client payloads pairwise
+import itertools
+print('--- identical client payloads? ---')
+sigs=set(p[1] for p in clients)
+print('unique payloads:',len(sigs),'of',len(clients))
+# xor first two
+if len(clients)>=2:
+    a,b=clients[0][1],clients[1][1]
+    x=bytes(i^j for i,j in zip(a,b))
+    print('xor of first two:',x.hex()[:80])
+    nz=sum(1 for c in x if c)
+    print('differing bytes:',nz,'of',len(x))
+EOF
+[47] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import subprocess
+out = subprocess.run(['tshark','-r','/home/ctfplayer/ctf_files/fenwick_capture.pcap','-Y','ip.addr==52.208.116.222 && tcp.len>0','-T','fields','-e','frame.number','-e','ip.src','-e','tcp.payload','-e','frame.time_relative'],capture_output=True,text=True).stdout
+rows=[l.split('\t') for l in out.strip().split('\n') if l.strip()]
+clients=[]
+for num,src,pay,t in rows:
+    p=bytes.fromhex(pay.replace(':',''))
+    print(num,src,len(p),t,p[:24].hex())
+    if src=='10.14.22.47': clients.append((float(t),p))
+print('---')
+sigs=set(p for _,p in clients)
+print('unique client payloads:',len(sigs),'of',len(clients))
+if len(clients)>=2:
+    a,b=clients[0][1],clients[1][1]
+    x=bytes(i^j for i,j in zip(a,b))
+    print('xor first two:',x.hex())
+    print('differing bytes:',sum(1 for c in x if c),'of',len(x))
+EOF
+[48] run_command cd /home/ctfplayer/ctf_files && echo "=== IPv4 in memdump ==="; grep -oE '\b([0-9]{1,3}\.){3}[0-9]{1,3}\b' fenwick_memdump.txt | sort | uniq -c; echo "=== IPv4 in XML ==="; grep -oE '\b([0-9]{1,3}\.){3}[0-9]{1,3}\b' fenwick_security.xml | sort | uniq -c | head -20; echo "=== domains in XML ==="; grep -oiE '[a-z0-9_-]+\.(com|net|org|local|io|xyz|ru|cn|top|info|biz)' fenwick_security.xml | sort | uniq -c | sort -rn | head -20
+[51] run_command cd /home/ctfplayer/ctf_files && python3 - <<'EOF'
+lines=open('fenwick_memdump.txt').read().splitlines()
+# 1) all-caps strings reversed
+import re
+print("=== ALL-CAPS strings and reversals ===")
+for l in lines:
+    p=l.split(' ',1)
+    if len(p)<2: continue
+    s=p[1]
+    if re.fullmatch(r'[A-Z_]{5,}', s):
+        print(f'{l}   REV={s[::-1]}')
+EOF
+[51] run_command cd /home/ctfplayer/ctf_files && python3 - <<'EOF'
+lines=open('fenwick_memdump.txt').read().splitlines()
+addrs=[]
+for i,l in enumerate(lines):
+    a=int(l.split(' ',1)[0],16)
+    addrs.append((i,a,l))
+# delta outliers
+gaps=[]
+for j in range(1,len(addrs)):
+    d=addrs[j][1]-addrs[j-1][1]
+    gaps.append((d,j))
+gaps.sort(reverse=True)
+print("=== largest address gaps ===")
+for d,j in gaps[:15]:
+    print(hex(d), 'line',j+1, repr(addrs[j][2][:60]))
+print("=== tail of dump ===")
+for i,a,l in addrs[-15:]:
+    print(l)
+EOF
+[52] run_command ls /usr/share/dict/ 2>/dev/null; ls /usr/share/hunspell 2>/dev/null; ls /usr/share/wordlists 2>/dev/null; pip list 2>/dev/null | grep -iE 'english|word|nltk' ; echo ---; grep -icE 'tiger|forest|copper|fudmodule|lazarus|hidden.?cobra|applejeus' /home/ctfplayer/ctf_files/fenwick_security.xml
+[52] run_command pip install english-words 2>&1 | tail -1
+[53] run_command cd /home/ctfplayer/ctf_files && python3 - <<'EOF'
+from english_words import get_english_words_set
+words={w.lower() for w in get_english_words_set(['web2'], lower=True) if len(w)>=4}
+print("dict size:",len(words))
+import re
+lines=open('fenwick_memdump.txt').read().splitlines()
+seen=set()
+for l in lines:
+    p=l.split(' ',1)
+    if len(p)<2: continue
+    s=p[1]
+    r=s[::-1]
+    for tok in re.findall(r'[A-Za-z_]{4,}', r):
+        t=tok.lower().strip('_')
+        if t in words and (l,t) not in seen:
+            seen.add((l,t)); print(l,'->',r,'->',t)
+EOF
+[54] run_command cd /home/ctfplayer/ctf_files && python3 - <<'EOF'
+import re
+from collections import Counter
+data=open('fenwick_security.xml').read()
+evs=re.findall(r'<Event .*?</Event>', data, re.S)
+c=Counter()
+for e in evs:
+    if '<EventID>7045</EventID>' in e:
+        n=lambda k: (re.search(r'<Data Name="%s">(.*?)</Data>'%k, e) or [None,'?'])[1]
+        c[(n('ServiceName'),n('ImagePath'),n('ServiceType'),n('StartType'))]+=1
+print("TOTAL unique:",len(c))
+for k,v in sorted(c.items(), key=lambda x:-x[1]):
+    print(v,'|',' | '.join(k))
+EOF
+[56] run_command cd /home/ctfplayer/ctf_files && echo "=== TIGER (REGIT) context ==="; grep -n -A6 -B6 'REGIT' fenwick_memdump.txt; echo "=== FOREST context ==="; grep -n -A6 -B6 'TSEROF' fenwick_memdump.txt; echo "=== COPPERHEDGE context ==="; grep -n -A6 -B6 'EGDEHREPPOC' fenwick_memdump.txt
+[57] run_command cd /home/ctfplayer/ctf_files && python3 - <<'EOF'
+lines=open('fenwick_memdump.txt').read().splitlines()
+targets=['InternetOpenW','HttpSendRequestW','WSAStartup','connect','VirtualAllocEx','CreateRemoteThread','CryptImportKey','CryptAcquireContextW']
+for i,l in enumerate(lines):
+    p=l.split(' ',1)
+    if len(p)<2: continue
+    if p[1] in targets:
+        print(f'--- {p[1]} @ line {i+1} ---')
+        for j in range(max(0,i-4), min(len(lines), i+6)):
+            print('   ', lines[j])
+        break_ = False
+EOF
+[58] run_command cd /home/ctfplayer/ctf_files && python3 - <<'EOF'
+import re, base64
+lines=open('fenwick_memdump.txt').read().splitlines()
+seen=set()
+for l in lines:
+    p=l.split(' ',1)
+    if len(p)<2: continue
+    s=p[1]
+    # try base64 decode of alnum chunks
+    for tok in re.findall(r'[A-Za-z0-9+/=]{8,}', s):
+        t=tok.replace('-','+').replace('.','/')
+        try:
+            pad=t+'='*((4-len(t)%4)%4)
+            d=base64.b64decode(pad)
+        except Exception:
+            continue
+        if all(32<=c<127 for c in d) and len(d)>=4:
+            ds=d.decode()
+            if re.search(r'[A-Za-z]{4,}', ds) and ds not in seen:
+                seen.add(ds)
+                print(l,'B64->',repr(ds))
+EOF
+[60] run_command cd /home/ctfplayer/ctf_files && python3 - <<'EOF'
+import re
+lines=open('fenwick_memdump.txt').read().splitlines()
+# vocabulary: everything meaningful from the other exhibits + security terms
+vocab=set()
+xml=open('fenwick_security.xml').read()
+for m in re.finditer(r'<Data Name="[^"]*">([^<]*)</Data>', xml): vocab.add(m.group(1))
+vocab |= {'docs-fenwick-portal.com','backup-vault.fenwick.local','fenwick-intranet.local','RELAYSHELL','BACKUPSVC','heartbeat','Afd4Eop12','BkupAgent64','NightlyBackup','InventorySync','FUDMODULE','COPPERHEDGE','FOREST','TIGER','Lazarus','HiddenCobra','AppleJeus','Applejeus','Troyec','troyec','reelay','relay','shellcode','backdoor','rootkit','keylogger','downloader','dropper','loader','stager','implant','beacon','rat','bot','worm','trojan','spyware','infostealer','credential','dumper','tunnel','proxy','socks','rdp','ssh','vpn','wmi','psexec','smb','http','https','dns','icmp','doxygen','dyepack','applessed','blindingcan','threeamiteam','andariel','kimsuky','konni','temp','temple','osc','dprk','lazar','cobalt','strike','empire','meterpreter','shad0w','sliver','brute','ratel','posh','c2','cnc','cc'}
+hits=[]
+for l in lines:
+    p=l.split(' ',1)
+    if len(p)<2: continue
+    s=p[1]
+    r=s[::-1].lower()
+    for w in vocab:
+        wl=w.lower()
+        if len(wl)>=5 and wl in r and wl not in s.lower():
+            hits.append((l,w))
+for h in hits[:60]: print(h)
+print('total hits:',len(hits))
+EOF
+[61] run_command cd /home/ctfplayer/ctf_files && python3 - <<'EOF'
+import re
+from collections import Counter
+xml=open('fenwick_security.xml').read()
+evs=re.findall(r'<Event .*?</Event>', xml, re.S)
+# 3008 DNS queries
+q=Counter()
+for e in evs:
+    if '<EventID>3008</EventID>' in e:
+        m=re.search(r'<Data Name="QueryName">([^<]*)</Data>', e)
+        if m: q[m.group(1)]+=1
+print("unique DNS names:",len(q))
+for k,v in q.most_common(): print(f'{v:4d} {k}')
+EOF
+[62] publish_insight {"text": "Memdump contains EXACTLY FOUR planted reversed words (verified against a 232k-word dictionary over all 3200 strings): REGIT->TIGER, ELUDOMDUF->FUDMODULE, EGDEHREPPOC->COPPERHEDGE, TSEROF->FOREST. These are Lazarus APT codenames (TigerDeep/FudModule rootkit/Copperhedge trojan/Forest? ). The backdoor-name slot of the flag is one of these - FUDMODULE most likely (AFD driver rootkit, matches Afd4Eop12 service + Services\\Afd regkeys). Base64-decode of all dump strings yields nothing.", "kind": "fact"}
+[62] check_hints {}
+[63] run_command cd /home/ctfplayer/ctf_files && python3 - <<'EOF'
+from english_words import get_english_words_set
+import re
+words={w.lower() for w in get_english_words_set(['web2'], lower=True) if len(w)>=5}
+xml=open('fenwick_security.xml').read()
+seen=set()
+for m in re.finditer(r'>([^<>]{5,})<', xml):
+    s=m.group(1)
+    r=s[::-1]
+    for tok in re.findall(r'[A-Za-z_]{5,}', r):
+        t=tok.lower().strip('_')
+        if t in words and (s,t) not in seen:
+            seen.add((s,t)); print('XML:',repr(s),'->',r,'->',t)
+EOF
+[63] run_command cd /home/ctfplayer/ctf_files && python3 - <<'EOF'
+from english_words import get_english_words_set
+import re, subprocess
+words={w.lower() for w in get_english_words_set(['web2'], lower=True) if len(w)>=5}
+out=subprocess.run(['strings','-n','6','fenwick_capture.pcap'],capture_output=True,text=True).stdout
+seen=set()
+for s in out.splitlines():
+    r=s[::-1]
+    for tok in re.findall(r'[A-Za-z_]{5,}', r):
+        t=tok.lower().strip('_')
+        if t in words and (s,t) not in seen:
+            seen.add((s,t)); print('PCAP:',repr(s),'->',r,'->',t)
+EOF
+[64] run_command cd /home/ctfplayer/ctf_files && python3 - <<'EOF'
+from english_words import get_english_words_set
+import re
+words={w.lower() for w in get_english_words_set(['web2'], lower=True) if len(w)>=4}
+lines=open('fenwick_memdump.txt').read().splitlines()
+seen=set()
+for l in lines:
+    p=l.split(' ',1)
+    if len(p)<2: continue
+    s=p[1]
+    r=s[::-1]
+    for tok in re.findall(r'[A-Za-z_]{4,}', r):
+        t=tok.lower().strip('_')
+        if t in words and (t,s) not in seen:
+            seen.add((t,s)); print(t,'|',s)
+print('total unique (word,string):',len(seen))
+EOF
+peer findings: 1 new
+[66] run_command cd /home/ctfplayer/ctf_files && grep -inE 'svc|serv|driver|module|backdoor|agent|shell|relay|beacon|implant|rootkit|bkup|afd|eop' fenwick_memdump.txt | grep -viE 'shell32|shell folders|shelldll|msvcrt|kernel32|user32|ole32|oleaut|ntdll|advapi|ws2_32|wininet|wintrust|propsys|sechost|shcore|userenv|dnsapi|netio|tcpip|flt|clus|stor|hal\.|ndis|wdf|SecurityHealthService|wscsvc|MsMpEng|WinDefend|svchost|services\.dll|services\.exe|lsass|smss|csrss|winlogon|explorer|service control|services\\|CurrentVersion|Service Pack|NT AUTHORITY|BUILTIN|Se[A-Z]|Local Service|NetworkService|netsvcs' | head -50
+[67] run_command cd /home/ctfplayer/ctf_files && python3 - <<'EOF'
+import re
+from collections import Counter
+lines=open('fenwick_memdump.txt').read().splitlines()
+c=Counter()
+for l in lines:
+    p=l.split(' ',1)
+    if len(p)>1 and p[1]: c[p[1]]+=1
+dups={k:v for k,v in c.items() if v>1}
+print("duplicated strings:",len(dups))
+for k,v in sorted(dups.items(), key=lambda x:-x[1]): print(v, repr(k))
+EOF
+peer findings: 1 new
+[69] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import subprocess
+out = subprocess.run(['tshark','-r','/home/ctfplayer/ctf_files/fenwick_capture.pcap','-Y','ip.dst==52.208.116.222 && tcp.len>0','-T','fields','-e','frame.number','-e','tcp.payload'],capture_output=True,text=True).stdout
+pays=[]
+for l in out.strip().split('\n'):
+    if not l.strip(): continue
+    num,pay=l.split('\t')
+    p=bytes.fromhex(pay.replace(':',''))
+    pays.append((int(num),p))
+print("client payloads:",len(pays), [len(p) for _,p in pays][:3])
+open('ft_client0.bin','wb').write(pays[0][1])
+open('ft_client1.bin','wb').write(pays[1][1])
+# crib-based XOR key recovery
+ct = pays[0][1][6:]  # skip 16 03 01 00 c8 01
+print("ct len:",len(ct))
+for crib in [b'POST /api/sync HTTP/1.1\r\nHost: ', b'GET /heartbeat HTTP/1.1\r\nHost: ', b'POST /api/v2/telemetry HTTP/1.1\r\n']:
+    ks = bytes(a^b for a,b in zip(ct, crib))
+    print(repr(crib[:20]), '->', ks.hex())
+    print('   ascii:', ''.join(chr(c) if 32<=c<127 else '.' for c in ks))
+EOF
+[70] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import subprocess, itertools
+out = subprocess.run(['tshark','-r','/home/ctfplayer/ctf_files/fenwick_capture.pcap','-Y','ip.dst==52.208.116.222 && tcp.len>0','-T','fields','-e','frame.number','-e','tcp.payload'],capture_output=True,text=True).stdout
+pays=[]
+for l in out.strip().split('\n'):
+    if not l.strip(): continue
+    num,pay=l.split('\t')
+    pays.append((int(num), bytes.fromhex(pay.replace(':',''))))
+cts=[p for _,p in pays if _ in (206,540,908,1242,1588,1860,2194,2562,2944,3258,3674,4050)]
+print("n client cts:",len(cts))
+# pairwise xor: zero runs indicate identical plaintext regions under SAME key (stream) or repeating key alignment
+best=[]
+for i,j in itertools.combinations(range(len(cts)),2):
+    x=bytes(a^b for a,b in zip(cts[i],cts[j]))
+    zeros=sum(1 for c in x if c==0)
+    best.append((zeros,i,j,x))
+best.sort(reverse=True)
+for z,i,j,x in best[:6]:
+    print(f'ct{i}^ct{j}: zeros={z}', x[:48].hex())
+x=best[0][3]
+print('full xor hex:', x.hex())
+EOF
+[73] run_command cd /home/ctfplayer/ctf_files && grep -inE 'd\.reyes|reyes' fenwick_security.xml | head -20; echo ===; grep -icE 'reyes' fenwick_memdump.txt; echo === 4624 for d.reyes ===; python3 - <<'EOF'
+import re
+from collections import Counter
+xml=open('fenwick_security.xml').read()
+evs=re.findall(r'<Event .*?</Event>', xml, re.S)
+c=Counter()
+for e in evs:
+    if '<EventID>4624</EventID>' in e:
+        d=dict(re.findall(r'<Data Name="([^"]*)">(.*?)</Data>', e))
+        if d.get('TargetUserName')=='d.reyes':
+            c[(d.get('LogonType'), d.get('IpAddress'))]+=1
+for k,v in c.most_common(12): print(v,k)
+EOF
+[73] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+# Score the four codewords against the three artifacts
+import re, subprocess
+xml=open('/home/ctfplayer/ctf_files/fenwick_security.xml').read()
+pcap_strings=subprocess.run(['strings','-n','5','/home/ctfplayer/ctf_files/fenwick_capture.pcap'],capture_output=True,text=True).stdout
+mem=open('/home/ctfplayer/ctf_files/fenwick_memdump.txt').read()
+memrev=mem[::-1]
+for w in ['tiger','fudmodule','copperhedge','forest']:
+    print(f'--- {w} ---')
+    print('  xml fwd:', len(re.findall(w, xml, re.I)))
+    print('  xml rev:', len(re.findall(w[::-1], xml, re.I)))
+    print('  pcap fwd:', len(re.findall(w, pcap_strings, re.I)))
+    print('  pcap rev:', len(re.findall(w[::-1], pcap_strings, re.I)))
+    print('  mem fwd:', len(re.findall(w, mem, re.I)), ' mem rev:', len(re.findall(w[::-1], mem, re.I)))
+EOF
+[75] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import subprocess
+# full HTTP request/response text of the two /api/sync conversations
+for stream in (None,):
+    pass
+out = subprocess.run(['tshark','-r','/home/ctfplayer/ctf_files/fenwick_capture.pcap','-Y','http.request || http.response','-T','fields','-e','frame.number','-e','tcp.stream','-e','http.request.line','-e','http.response.line','-e','http.file_data'],capture_output=True,text=True).stdout
+for l in out.strip().split('\n'):
+    if 'sync' in l or 'heartbeat' in l.split('\t')[0] or 'pkg_' in l:
+        pass
+# simpler: dump both sync streams fully
+for s in ['26','27']:
+    print(f'=== stream {s} ===')
+    o = subprocess.run(['tshark','-r','/home/ctfplayer/ctf_files/fenwick_capture.pcap','-q','-z','follow,tcp,ascii,'+s],capture_output=True,text=True).stdout
+    print(o[:1600])
+EOF
+[76] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import subprocess
+# find the tcp.stream indices of the two /api/sync conversations
+out = subprocess.run(['tshark','-r','/home/ctfplayer/ctf_files/fenwick_capture.pcap','-Y','http.request.uri=="/api/sync"','-T','fields','-e','frame.number','-e','tcp.stream','-e','ip.dst'],capture_output=True,text=True).stdout
+print(out)
+for s in out.strip().split('\n'):
+    idx=s.split('\t')[1]
+    o = subprocess.run(['tshark','-r','/home/ctfplayer/ctf_files/fenwick_capture.pcap','-q','-z','follow,tcp,ascii,'+idx],capture_output=True,text=True).stdout
+    print(o[:1800])
+    print('======')
+EOF
+[77] run_command cd /home/ctfplayer/ctf_files && grep -inE '52\.208\.116|52\.112\.198|8443|heartbeat|portal|vault|sync|beacon' fenwick_memdump.txt | head -10; echo "=== all https:// + http:// strings ==="; grep -oE '(https?://[A-Za-z0-9./_-]+)' fenwick_memdump.txt | sort | uniq -c | sort -rn
+[78] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import subprocess
+# follow the 12 fake-TLS streams; get stream ids from frame numbers
+frames='206,540,908,1242,1588,1860,2194,2562,2944,3258,3674,4050'
+out = subprocess.run(['tshark','-r','/home/ctfplayer/ctf_files/fenwick_capture.pcap','-Y',f'frame.number in {{{frames}}}','-T','fields','-e','frame.number','-e','tcp.stream'],capture_output=True,text=True).stdout
+streams=[l.split('\t')[1] for l in out.strip().split('\n')]
+print("streams:",streams)
+# follow the first one
+o = subprocess.run(['tshark','-r','/home/ctfplayer/ctf_files/fenwick_capture.pcap','-q','-z',f'follow,tcp,ascii,{streams[0]}'],capture_output=True,text=True).stdout
+print(o[:1200])
+EOF
+[80] run_command cd /home/ctfplayer/ctf_files && python3 - <<'EOF'
+import re
+xml=open('fenwick_security.xml').read()
+evs=re.findall(r'<Event .*?</Event>', xml, re.S)
+# All events involving the anomalous service names or lookalike names
+for e in evs:
+    if re.search(r'BkupAgent|Afd4Eop|NightlyBackup|backup-vault|InventorySync', e):
+        eid=re.search(r'<EventID>(\d+)</EventID>',e).group(1)
+        t=re.search(r'SystemTime="([^"]*)"',e).group(1)
+        d=dict(re.findall(r'<Data Name="([^"]*)">(.*?)</Data>', e))
+        print(eid, t, d)
+EOF
+[82] run_command cd /home/ctfplayer/ctf_files && grep -inE 'EoP|eop|priv|esc|token|imperson|SeDebug|SeTcb' fenwick_memdump.txt | grep -viE 'shell32|msvcrt|kernel32|user32|ole32|oleaut|ntdll|advapi|ws2_32|wininet|wintrust|propsys|sechost|shcore|userenv|dnsapi|Crypt|NCrypt|BCrypt|bcrypt' | head -30
+[83] run_command cd /home/ctfplayer/ctf_files && python3 - <<'EOF'
+import re
+lines=open('fenwick_memdump.txt').read().splitlines()
+# every string containing 'eop' or 'EOP' or 'e0p'/'E0P' variants
+for i,l in enumerate(lines):
+    p=l.split(' ',1)
+    if len(p)<2: continue
+    s=p[1]
+    if re.search(r'e0?op|eop|3op|e0p', s, re.I):
+        print(i+1, l)
+EOF
+[84] run_command cd /home/ctfplayer/ctf_files && python3 - <<'EOF'
+import re
+lines=open('fenwick_memdump.txt').read().splitlines()
+for i,l in enumerate(lines):
+    p=l.split(' ',1)
+    if len(p)<2: continue
+    s=p[1]
+    if re.search(r'eop|e0p|3op', s, re.I):
+        print(i+1, l)
+print('---done---')
+# also check for 'afd4' anywhere
+for i,l in enumerate(lines):
+    if re.search(r'afd.?4|4.?eop|eop.?12|12', l.split(' ',1)[-1] if ' ' in l else '', re.I):
+        pass
+EOF
+[85] run_command cd /home/ctfplayer/ctf_files && python3 - <<'EOF'
+import re
+lines=open('fenwick_memdump.txt').read().splitlines()
+for i,l in enumerate(lines):
+    p=l.split(' ',1)
+    if len(p)<2: continue
+    s=p[1]
+    if re.search(r'eop|e0p|3op', s, re.I):
+        print(i+1, l)
+print('--- eop scan done ---')
+EOF
+[86] run_command cd /home/ctfplayer/ctf_files && python3 - <<'EOF'
+import re
+lines=open('fenwick_memdump.txt').read().splitlines()
+hits=0
+for i,l in enumerate(lines):
+    p=l.split(' ',1)
+    if len(p)<2: continue
+    s=p[1]
+    if re.search(r'eop|e0p|3op', s, re.I):
+        print(i+1, l); hits+=1
+print('eop hits:',hits)
+# AFD strings
+afd=[l for l in lines if re.search(r'afd', l.split(' ',1)[-1] if ' ' in l else '', re.I)]
+print('afd strings:',len(afd))
+for a in afd[:12]: print(a)
+EOF
+[87] run_command cd /home/ctfplayer/ctf_files && grep -inE 'eop|e0p|3op|e\.o\.p' fenwick_memdump.txt | head; echo "--- direct grep done ---"; grep -in 'eop' fenwick_memdump.txt | wc -l
+finished: unsolved reason=budget rounds=88 cost=$0.2005 transcript=C:\Users\Dingus\csaw26_llm_ctf\logs\evals\20261110-230852__eval\05__Breach- Zero Day\lane-1\20261110-233927__forensics_Breach__Zero_Day_main_z-ai_glm-5_3-flash.json

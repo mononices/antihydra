@@ -1,0 +1,244 @@
+[01] run_command ls -la /home/ctfplayer/ctf_files/ && file /home/ctfplayer/ctf_files/finderskeepers.mp4 && ffprobe -v error -show_format -show_streams /home/ctfplayer/ctf_files/finderskeepers.mp4 2>&1 | head -60
+[02] run_command mkdir -p /home/ctfplayer/workspace/frames && cd /home/ctfplayer/workspace && ffmpeg -v error -i /home/ctfplayer/ctf_files/finderskeepers.mp4 -vsync 0 frames/f%04d.png && ls frames | head && ls frames | wc -l
+[02] run_command cd /home/ctfplayer/workspace && ffprobe -v error -show_entries format_tags -of default /home/ctfplayer/ctf_files/finderskeepers.mp4; strings -n 8 /home/ctfplayer/ctf_files/finderskeepers.mp4 | head -50; exiftool /home/ctfplayer/ctf_files/finderskeepers.mp4 2>/dev/null | head -40
+[03] run_command echo 'ZXNucHtkMGNfQHl6QGdsX21uMGpfcG0zejNfZzBfbzAwc30=' | base64 -d; echo
+[04] create_file {"path": "/home/ctfplayer/workspace/brute.py", "content": "import string, itertools\n\nct = \"esnp{d0c_@yz@gl_mn0j_pm3z3_g0_o00s}\"\ninner = ct[5:-1]\n\nprint(\"=== Caesar (letters only, preserve case) ===\")\nfor k in range(26):\n    out = ''.join(chr((ord(c)-65+k)%26+65) if c.isupper() else (chr((ord(c)-97+k)%26+97) if c.islower() else c) for c in ct)\n    print(k, out)\n\nprint(\"=== ROT47 ===\")\nprint(''.join(chr((ord(c)-33+47)%94+33) if 33 <= ord(c) <= 126 else c for c in ct))\n\nprint(\"=== Atbash ===\")\nprint(''.join(chr(219-ord(c)) if c.islower() else (chr(155-ord(c)) if c.isupper() else c) for c in ct))\n\nprint(\"=== Keyboard shift left/right ===\")\nrows = [\"qwertyuiop\", \"asdfghjkl\", \"zxcvbnm\"]\ndef shift(s, d):\n    out=[]\n    for c in s:\n        lc=c.lower()\n        done=False\n        for r in rows:\n            if lc in r:\n                i=r.index(lc)\n                j=i+d\n                if 0<=j<len(r):\n                    nc=r[j]\n                    out.append(nc.upper() if c.isupper() else nc)\n                else:\n                    out.append(c)\n                done=True\n                break\n        if not done: out.append(c)\n    return ''.join(out)\nprint(\"left :\", shift(ct,-1))\nprint(\"right:\", shift(ct,1))\n\nprint(\"=== Keyboard row up/down ===\")\ndef vshift(s, d):\n    # rows offsets roughly\n    rowmap = {}\n    for ri,r in enumerate(rows):\n        for ci,c in enumerate(r):\n            rowmap[c]=(ri,ci)\n    out=[]\n    for c in s:\n        lc=c.lower()\n        if lc in rowmap:\n            ri,ci=rowmap[lc]\n            nr=ri+d\n            if 0<=nr<len(rows):\n                r=rows[nr]\n                ci2=min(ci,len(r)-1)\n                nc=r[ci2]\n                out.append(nc.upper() if c.isupper() else nc)\n            else:\n                out.append(c)\n        else:\n            out.append(c)\n    return ''.join(out)\nprint(\"up  :\", vshift(ct,-1))\nprint(\"down:\", vshift(ct,1))\n\nprint(\"=== QWERTY<->Dvorak ===\")\nq = \"qwertyuiop[]asdfghjkl;'zxcvbnm,./\"\nd = \"',.pyfgcrl/=aoeuidhtns-;qjkxbmwvz\"\nprint(\"q->d:\", ct.translate(str.maketrans(q,d)))\nprint(\"d->q:\", ct.translate(str.maketrans(d,q)))\n"}
+[05] run_command cd /home/ctfplayer/workspace && python3 brute.py
+[06] view_image {"path": "/home/ctfplayer/workspace/frames/f0001.png", "question": "What does this frame show? Any text?"}
+[06] run_command cd /home/ctfplayer/workspace && for f in 0001 0050 0100 0150 0200 0250 0300; do echo "== $f"; python3 -c "
+from PIL import Image
+import numpy as np
+im=np.array(Image.open('frames/f$f.png').convert('RGB'))
+print(im.shape, im.mean(axis=(0,1)), im.std(axis=(0,1)))
+"; done
+attached 1 image(s) to the next round
+[07] view_image {"path": "/home/ctfplayer/workspace/frames/f0150.png", "question": "What does this frame show? Any text or letters formed by shapes?"}
+[07] view_image {"path": "/home/ctfplayer/workspace/frames/f0300.png", "question": "What does this frame show? Any text or letters formed by shapes?"}
+attached 2 image(s) to the next round
+[08] run_command cd /home/ctfplayer/workspace && exiftool -a -u -g1 /home/ctfplayer/ctf_files/finderskeepers.mp4 2>/dev/null | head -80; echo "=== strings all ==="; strings -n 4 /home/ctfplayer/ctf_files/finderskeepers.mp4 | grep -v '^[A-Za-z0-9+/=]\{40,\}$' | head -60
+[08] run_command cd /home/ctfplayer/workspace && python3 -c "
+import subprocess
+# dump all strings with offsets
+data=open('/home/ctfplayer/ctf_files/finderskeepers.mp4','rb').read()
+import re
+for m in re.finditer(rb'[ -~]{6,}', data):
+    s=m.group().decode()
+    if len(s)<200:
+        print(hex(m.start()), s)
+" | head -80
+[12] run_command cd /home/ctfplayer/workspace && python3 -c "
+s='esnp{d0c_@yz@gl_mn0j_pm3z3_g0_o00s}'
+# try keyboard one-key-left using proper ANSI rows and shifted-symbol map
+rows=['\`1234567890-=','qwertyuiop[]\\\\','asdfghjkl;\'','zxcvbnm,./']
+for d in (-1,1):
+    out=[]
+    for c in s:
+        lc=c.lower()
+        found=False
+        for r in rows:
+            if lc in r:
+                i=r.index(lc); j=i+d
+                if 0<=j<len(r):
+                    nc=r[j]; out.append(nc.upper() if c.isupper() else nc)
+                else: out.append(c)
+                found=True; break
+        if not found: out.append(c)
+    print(d, ''.join(out))
+"
+peer findings: 2 new
+peer findings: 1 new
+[22] run_command cd /home/ctfplayer/workspace && python3 -c "
+import itertools,string
+ct='esnp{d0c_@yz@gl_mn0j_pm3z3_g0_o00s}'
+# 1. affine on letters
+for a in range(26):
+    if __import__('math').gcd(a,26)!=1: continue
+    for b in range(26):
+        out=''.join(chr((a*(ord(c)-97)+b)%26+97) if c.islower() else c for c in ct)
+        if out.startswith(('flag','ctf{','pico','nite','htb','find')): print('affine',a,b,out)
+# 2. affine with symbols mapped too (full printable?)
+# 3. rail fence / columnar on body
+body=ct[5:-1]
+print('body',body)
+for n in range(2,8):
+    # rail fence decode
+    import math
+    L=len(body); r=n
+    pat=[0]*L; row=0; d=1
+    for i in range(L):
+        pat[i]=row
+        if row==0: d=1
+        elif row==r-1: d=-1
+        row+=d
+    order=sorted(range(L), key=lambda i:(pat[i],i))
+    dec=['']*L
+    for ch,idx in zip(body,order): dec[idx]=ch
+    print('rail',n,''.join(dec))
+"
+peer findings: 1 new
+peer findings: 1 new
+[30] run_command cd /home/ctfplayer/workspace && python3 -c "
+s='esnp{d0c_@yz@gl_mn0j_pm3z3_g0_o00s}'
+# Try all single affine maps over full printable ASCII: y = a*x+b mod 94 over 33..126
+for a in range(1,94):
+    import math
+    if math.gcd(a,94)!=1: continue
+    for b in range(94):
+        out=''.join(chr((a*(ord(c)-33)+b)%94+33) for c in s)
+        if out.startswith(('flag','ctf{','CTF{','pico','nite')):
+            print(a,b,out)
+print('done')
+"
+[33] run_command cd /home/ctfplayer/workspace && python3 -c "
+s='esnp{d0c_@yz@gl_mn0j_pm3z3_g0_o00s}'
+# Vigenere with key = 'flag' etc? Actually try: maybe plaintext is leetspeak-ish and cipher is 'keyboard adjacent'. 
+# Try substitution where each char maps to the char at same position in a shifted alphabet keyboard layout (AZERTY, QWERTZ)
+azerty='azertyuiopqsdfghjklmwxcvbn'
+qwerty='qwertyuiopasdfghjklzxcvbnm'
+print('q->az:', s.translate(str.maketrans(qwerty,azerty)))
+print('az->q:', s.translate(str.maketrans(azerty,qwerty)))
+qwz='qwertzuiopasdfghjklyxcvbnm'
+print('q->qz:', s.translate(str.maketrans(qwerty,qwz)))
+# Try reading the string reversed
+print('rev:', s[::-1])
+# Try 'esnp' -> 'flag'?: mapping differences
+print([ (ord(b)-ord(a))%26 for a,b in zip('esnp','flag')])
+print([ (ord(b)-ord(a))%26 for a,b in zip('esnp','ctf{')])
+"
+peer findings: 1 new
+peer findings: 1 new
+[38] run_command cd /home/ctfplayer/workspace && python3 -c "
+s='esnp{d0c_@yz@gl_mn0j_pm3z3_g0_o00s}'
+# Maybe the flag is 'esnp' unmasked via a polyalphabetic cipher with a key discoverable from the video? 
+# Try: the video is Canva 'finders keepers'. Maybe the cipher is a substitution where 'esnp'->'flag' gives a partial key.
+# Try solving as a simple substitution using English word patterns: body looks like leetspeak with @ for a, 0 for o, 3 for e.
+# Leet-decode first:
+leet = s.replace('@','a').replace('0','o').replace('3','e')
+print('leet:', leet)
+# Now body: doc_ayzagl_mnoj_pmezе_go_ooos
+# Hmm 'pm3z3' -> 'pmeze'? maybe 'pmeze' = 'prime'? no.
+# Try treating digits as letters: 0=o,3=e,1=i,4=a,5=s,7=t
+d2l = s.maketrans('013457@','oieast a'.replace(' ',''))
+print('d2l:', s.translate(str.maketrans('0134578@','oieastba')))
+"
+[40] run_command cd /home/ctfplayer/workspace && python3 -c "
+s='esnp{d0c_@yz@gl_mn0j_pm3z3_g0_o00s}'
+# Try ROT over the full 94 printable with all shifts, check for common words
+for k in range(94):
+    out=''.join(chr((ord(c)-33+k)%94+33) for c in s)
+    if any(w in out.lower() for w in ['flag','the','and','you','ctf','key','find']):
+        print(k, out)
+print('---done---')
+"
+[41] run_command cd /home/ctfplayer/workspace && python3 -c "
+from PIL import Image
+import numpy as np, glob
+files=sorted(glob.glob('frames/f*.png'))
+acc=None
+mx=None
+for f in files:
+    a=np.array(Image.open(f).convert('L'),dtype=np.float32)
+    acc = a if acc is None else acc+a
+    mx = a if mx is None else np.maximum(mx,a)
+mean=(acc/len(files)).astype(np.uint8)
+Image.fromarray(mean).save('mean.png')
+Image.fromarray(mx.astype(np.uint8)).save('max.png')
+print('ok', len(files))
+"
+[42] view_image {"path": "/home/ctfplayer/workspace/mean.png", "question": "Does the temporal mean of all frames reveal any hidden text or letters?"}
+[42] view_image {"path": "/home/ctfplayer/workspace/max.png", "question": "Does the temporal max of all frames reveal any hidden text or letters?"}
+attached 2 image(s) to the next round
+[44] run_command cd /home/ctfplayer/workspace && python3 -c "
+from PIL import Image
+import numpy as np, glob
+files=sorted(glob.glob('frames/f*.png'))
+# The mean/max show a faint 'pb' logo near center-top. Check the watermark region across frames: maybe it's a logo, not text.
+# Look at frame 1 crop of that region
+im=Image.open('frames/f0001.png')
+im.crop((850,80,1150,260)).resize((900,540)).save('crop_logo.png')
+im2=Image.open('frames/f0150.png')
+im2.crop((850,80,1150,260)).resize((900,540)).save('crop_logo150.png')
+print('ok')
+"
+[45] view_image {"path": "/home/ctfplayer/workspace/crop_logo.png", "question": "Zoomed logo region from frame 1: what text/symbols are visible?"}
+attached 1 image(s) to the next round
+[47] run_command cd /home/ctfplayer/workspace && python3 -c "
+from PIL import Image
+import numpy as np, glob
+files=sorted(glob.glob('frames/f*.png'))
+# The 'pb' watermark appears in the max image around x~1000,y~140 in 1920x1080. Find exact location.
+a=np.array(Image.open('frames/f0001.png').convert('L'),dtype=np.int16)
+# search frames for a small dark logo on dark bg: instead diff each frame against median of all frames
+stack=np.stack([np.array(Image.open(f).convert('L'),dtype=np.float32) for f in files])
+med=np.median(stack,axis=0)
+d=np.abs(stack[0]-med)
+ys,xs=np.where(d>20)
+print('diff pixels', len(ys))
+if len(ys): print(xs.min(),xs.max(),ys.min(),ys.max())
+np.save('stack.npy', stack)
+print(stack.shape)
+"
+[48] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+import struct
+data=open('/home/ctfplayer/ctf_files/finderskeepers.mp4','rb').read()
+print('filesize',len(data))
+def walk(off,end,depth=0):
+    while off+8<=end:
+        size=struct.unpack('>I',data[off:off+4])[0]
+        typ=data[off+4:off+8].decode('latin1')
+        hdr=8
+        if size==1:
+            size=struct.unpack('>Q',data[off+8:off+16])[0]; hdr=16
+        elif size==0:
+            size=end-off
+        print('  '*depth, hex(off), typ, size)
+        if typ in ('moov','trak','mdia','minf','stbl','udta','meta','ilst','edts','dinf'):
+            sub=off+hdr
+            if typ=='meta': sub=off+hdr+4
+            walk(sub, off+size, depth+1)
+        off+=size
+        if size<=0: break
+walk(0,len(data))
+EOF
+peer findings: 1 new
+[50] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+data=open('/home/ctfplayer/ctf_files/finderskeepers.mp4','rb').read()
+uuid=data[0x1175:0x1175+3483]
+print('uuid type:', uuid[8:24].hex())
+print('uuid type ascii:', uuid[8:24])
+payload=uuid[24:]
+print('payload len', len(payload))
+print(payload[:400])
+print('---')
+print('udta skip:', data[0x111c:0x111c+89])
+EOF
+[52] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+data=open('/home/ctfplayer/ctf_files/finderskeepers.mp4','rb').read()
+xmp=data[0x1175+24:0x1175+3483]
+open('xmp.bin','wb').write(xmp)
+import re
+# print all non-whitespace lines and count whitespace runs
+txt=xmp.decode('utf-8',errors='replace')
+for i,line in enumerate(txt.split('\n')):
+    if line.strip():
+        print(i, repr(line))
+# check for whitespace-only lines with unusual lengths
+ws=[(i,len(l)) for i,l in enumerate(txt.split('\n')) if l and not l.strip()]
+print('whitespace lines:', ws)
+EOF
+[56] run_command cd /home/ctfplayer/workspace && python3 - <<'EOF'
+s='esnp{d0c_@yz@gl_mn0j_pm3z3_g0_o00s}'
+# Brute force Vigenere over printable ASCII with dictionary-ish keys
+import itertools, string
+keys=['finders','keepers','finderskeepers','canva','jc','key','secret','hidden','message','video','mp4','ctf','flag','crypto','esnp','rot','shift','caesar','leet','keyboard','qwerty','dvorak','azerty']
+def vigen(s,key,dec=True):
+    out=[]
+    for i,c in enumerate(s):
+        k=ord(key[i%len(key)])
+        out.append(chr((ord(c)-(k if dec else 0))%94+33) if False else chr(((ord(c)-33)+((-1 if dec else 1)*(k-33)))%94+33))
+    return ''.join(out)
+for k in keys:
+    print(k, vigen(s,k))
+EOF
+peer findings: 1 new
+finished: aborted reason=aborted rounds=59 cost=$0.0996 transcript=C:\Users\Dingus\csaw26_llm_ctf\logs\evals\20261110-230852__eval\01__finders keepers\lane-3\20261110-233020__crypto_finders_keepers_main_deepseek_deepseek-v4_1-flash.json
