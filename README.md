@@ -1,12 +1,12 @@
 # Antihydra
 #### (C) Team AUSEC
 
-Autonomous racing-based LLM CTF solver: several models attack the same challenge in parallel lanes. The first lane to produce a *verified* flag wins and the rest are stopped. ***No** human is involved*.
+Agentic racing-based CTF solver: several models communicate and attack the same challenge in parallel lanes. The first lane to produce a *verified* flag wins and the rest are stopped. No human is involved.
 ## Results
 
-| Challenge | Solved | Wall clock | Evidence |
-|:-:|:-:|:-:|:-:|
-| CSAW26 qualifiers | 6 / 16  (37.5%) | 48 min | [Logs](logs/evals/20261106-232811__eval/)  ·  [Writeup](SUBMISSION.md) |
+| Challenge | Place | Solved | Wall clock | API costs | Evidence |
+|:-:|:-:|:-:|:-:|:-:|:-:|
+| CSAW26 | 2nd | 15 / 23  (65.2%) | 84 min | ~12$ | [Logs](logs/evals/) |
 
 ## How it works
 
