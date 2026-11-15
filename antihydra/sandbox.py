@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import os
 import shlex
 import shutil
@@ -10,12 +12,18 @@ import sys
 import threading
 import time
 import uuid
+from collections import Counter, deque
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Callable
+from typing import Callable, IO
 
 LEASE_LABEL = "antihydra.sandbox"
 KEEP_ALIVE = "tail -f /dev/null"
+
+FLOOD_REPEAT = 60  # identical lines inside the recent window that count as a loop
+FLOOD_WINDOW = 500  # how many recent lines the window holds
+FLOOD_BYTES = 2_000_000  # backstop for output that never repeats a line
+FLOOD_MIN_LINE = 8  # ignore blank/short lines (progress bars, brace soup)
 
 _WINDOWS_DOCKER_HINTS = (
     r"C:\Program Files\Docker\Docker\resources\bin\docker.exe",
@@ -148,6 +156,63 @@ def _decode(data: bytes | None) -> str:
     return data.decode("utf-8", "replace").replace("\r\n", "\n")
 
 
+class OutputFlood:
+    """Trips when a command keeps printing the same output.
+
+    An interactive binary handed a closed stdin spins forever ("no such
+    option"), which otherwise costs the whole command timeout and floods the
+    transcript. Both pipes get their own guard.
+    """
+
+    def __init__(
+        self,
+        repeat: int = FLOOD_REPEAT,
+        window: int = FLOOD_WINDOW,
+        max_bytes: int = FLOOD_BYTES,
+    ) -> None:
+        self.repeat = repeat
+        self.max_bytes = max_bytes
+        self.bytes = 0
+        self.line: str | None = None
+        self.count = 0
+        self._window: deque[str] = deque(maxlen=window)
+        self._counts: Counter[str] = Counter()
+        self._pending = ""
+
+    def feed(self, text: str) -> bool:
+        """Consume one decoded chunk; True once the command should be killed."""
+        self.bytes += len(text)
+        if self.bytes > self.max_bytes:
+            self.count = self.bytes
+            return True
+        self._pending += text
+        lines = self._pending.split("\n")
+        self._pending = lines.pop()
+        return any(self._add(line.strip()) for line in lines)
+
+    def describe(self) -> str:
+        """Short reason for the kill, safe to hand back to the model."""
+        if self.line:
+            return f"line repeated {self.count}x: {self.line[:120]!r}"
+        return f"output passed {self.bytes} bytes without finishing"
+
+    def _add(self, line: str) -> bool:
+        if len(line) < FLOOD_MIN_LINE:
+            return False
+        if len(self._window) == self._window.maxlen:
+            dropped = self._window[0]
+            self._counts[dropped] -= 1
+            if self._counts[dropped] <= 0:
+                del self._counts[dropped]
+        self._window.append(line)
+        self._counts[line] += 1
+        if self._counts[line] >= self.repeat:
+            self.line = line
+            self.count = self._counts[line]
+            return True
+        return False
+
+
 @dataclass
 class ExecResult:
     """Result of a command executed inside the sandbox."""
@@ -156,18 +221,103 @@ class ExecResult:
     stderr: str
     exit_code: int | None
     timed_out: bool
+    killed: str | None = None
+    note: str = ""
 
     @property
     def ok(self) -> bool:
         return self.exit_code == 0 and not self.timed_out
 
     def to_dict(self) -> dict:
-        return {
+        payload = {
             "stdout": self.stdout,
             "stderr": self.stderr,
             "exit_code": self.exit_code,
             "timed_out": self.timed_out,
         }
+        if self.killed:
+            payload["killed"] = self.killed
+            payload["killed_note"] = self.note
+        return payload
+
+
+def _run_streaming(argv: list[str], timeout: float) -> ExecResult:
+    """Run ``argv`` while watching both pipes so runaway output dies early.
+
+    ``subprocess.run`` can only kill on the timeout, so a command that loops
+    printing the same line (an interactive binary with no stdin) used to eat
+    the full timeout. Reader threads keep the guard fed line by line instead.
+    """
+    proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    guards = {"out": OutputFlood(), "err": OutputFlood()}
+    trip = threading.Event()
+    stdout: list[str] = []
+    stderr: list[str] = []
+
+    def kill() -> None:
+        try:
+            proc.kill()
+        except OSError:
+            pass
+
+    def pump(stream: IO[bytes] | None, parts: list[str], guard: OutputFlood) -> None:
+        try:
+            while True:
+                chunk = stream.readline(65536) if stream else b""
+                if not chunk:
+                    break
+                text = _decode(chunk)
+                if trip.is_set():
+                    continue  # keep draining so the dying process never blocks
+                parts.append(text)
+                if guard.feed(text):
+                    trip.set()
+                    kill()
+        except (OSError, ValueError):
+            pass
+
+    readers = [
+        threading.Thread(
+            target=pump, args=(proc.stdout, stdout, guards["out"]), daemon=True
+        ),
+        threading.Thread(
+            target=pump, args=(proc.stderr, stderr, guards["err"]), daemon=True
+        ),
+    ]
+    for reader in readers:
+        reader.start()
+    timed_out = False
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        kill()
+        proc.wait()
+    for reader in readers:
+        reader.join(timeout=5)
+    for stream in (proc.stdout, proc.stderr):
+        try:
+            if stream:
+                stream.close()
+        except OSError:
+            pass
+
+    killed: str | None = "timeout" if timed_out else None
+    note = ""
+    if trip.is_set():
+        guard = next(
+            (item for item in guards.values() if item.line),
+            max(guards.values(), key=lambda item: item.bytes),
+        )
+        killed, note = "output_flood", guard.describe()
+    return ExecResult(
+        stdout="".join(stdout),
+        stderr="".join(stderr),
+        exit_code=None if killed else proc.returncode,
+        timed_out=timed_out,
+        killed=killed,
+        note=note,
+    )
 
 
 class Sandbox:
@@ -304,16 +454,9 @@ class Sandbox:
         """Run a shell command inside the container."""
         if not self.container_id:
             raise SandboxError("sandbox is not running")
-        try:
-            proc = subprocess.run(
-                [self.docker, "exec", self.container_id, self.shell, "-c", command],
-                capture_output=True,
-                timeout=timeout,
-            )
-        except subprocess.TimeoutExpired as exc:
-            return ExecResult(_decode(exc.stdout), _decode(exc.stderr), None, True)
-        return ExecResult(
-            _decode(proc.stdout), _decode(proc.stderr), proc.returncode, False
+        return _run_streaming(
+            [self.docker, "exec", self.container_id, self.shell, "-c", command],
+            timeout=timeout,
         )
 
     def copy_in(self, host_path: str | Path, container_path: str) -> None:
@@ -353,6 +496,35 @@ class Sandbox:
         )
         if proc.returncode != 0:
             raise SandboxError("failed to write file:\n" + _decode(proc.stderr).strip())
+
+    def file_size(self, container_path: str) -> int:
+        """Size of a file inside the container, or -1 when it does not exist."""
+        result = self.exec(f"wc -c < {shlex.quote(container_path)}")
+        if result.exit_code != 0:
+            return -1
+        try:
+            return int(result.stdout.strip().split()[0])
+        except (IndexError, ValueError):
+            return -1
+
+    def read_bytes(self, container_path: str, limit: int = 4_000_000) -> bytes:
+        """Read a container file as bytes, refusing anything over ``limit``."""
+        size = self.file_size(container_path)
+        if size < 0:
+            raise SandboxError(f"no such file: {container_path}")
+        if size > limit:
+            raise SandboxError(
+                f"{container_path} is {size} bytes; the read limit is {limit} bytes"
+            )
+        result = self.exec(f"base64 -w0 {shlex.quote(container_path)}", timeout=120)
+        if result.exit_code != 0:
+            raise SandboxError(
+                f"failed to read {container_path}: {result.stderr.strip()}"
+            )
+        try:
+            return base64.b64decode(result.stdout, validate=False)
+        except (ValueError, binascii.Error) as exc:
+            raise SandboxError(f"failed to decode {container_path}: {exc}") from exc
 
     def read_text(self, container_path: str, limit: int | None = None) -> str:
         """Read a file from the container (optionally truncated to ``limit`` chars)."""

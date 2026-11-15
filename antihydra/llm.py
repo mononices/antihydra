@@ -47,6 +47,7 @@ class ModelPrice:
     prompt: float  # USD per prompt token
     completion: float  # USD per completion token
     context_length: int | None = None
+    input_modalities: tuple[str, ...] = ()
 
 
 def normalize_model(model: str) -> str:
@@ -78,6 +79,9 @@ def fetch_catalog(*, timeout: float = 30) -> dict[str, ModelPrice]:
             prompt=max(prompt, 0.0),
             completion=max(completion, 0.0),
             context_length=entry.get("context_length"),
+            input_modalities=tuple(
+                str(item) for item in ((entry.get("architecture") or {}).get("input_modalities") or [])
+            ),
         )
     return catalog
 
@@ -102,6 +106,7 @@ def load_catalog(
                     prompt=float(entry.get("prompt", 0) or 0),
                     completion=float(entry.get("completion", 0) or 0),
                     context_length=entry.get("context_length"),
+                    input_modalities=tuple(entry.get("input_modalities") or ()),
                 )
                 for model_id, entry in (raw.get("models") or {}).items()
             }
@@ -123,6 +128,7 @@ def load_catalog(
                         "prompt": price.prompt,
                         "completion": price.completion,
                         "context_length": price.context_length,
+                        "input_modalities": list(price.input_modalities),
                     }
                     for model_id, price in catalog.items()
                 },
@@ -168,6 +174,13 @@ class OpenRouterLLM:
         """Model context window from the price catalog, when known."""
         price = self.catalog.get(self.model)
         return price.context_length if price else None
+
+    def supports_images(self) -> bool | None:
+        """True/False when the catalog reports modalities, None when unknown."""
+        price = self.catalog.get(self.model)
+        if price is None or not price.input_modalities:
+            return None
+        return "image" in price.input_modalities
 
     def _headers(self) -> dict[str, str]:
         return {

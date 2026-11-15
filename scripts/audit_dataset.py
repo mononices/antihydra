@@ -1,16 +1,36 @@
 #!/usr/bin/env python3
 """Audit challenge data for flag leaks into the agent sandbox.
 
-Run: python scripts/audit_dataset.py [root]   (default: competition/2025)
+Run: python scripts/audit_dataset.py [--root competition/2026]
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 from pathlib import Path
 
 DEFAULT_ROOT = "competition/2025"
+
+
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument(
+        "root_positional",
+        nargs="?",
+        default=None,
+        help="challenge root (kept for compatibility; prefer --root)",
+    )
+    parser.add_argument(
+        "--root",
+        default=DEFAULT_ROOT,
+        help="challenge root (default: %(default)s)",
+    )
+    args = parser.parse_args(argv)
+    if args.root_positional:
+        args.root = args.root_positional
+    return args
 
 
 def _inside(path: Path, base: Path) -> bool:
@@ -23,6 +43,9 @@ def _inside(path: Path, base: Path) -> bool:
 
 def audit(root: Path) -> int:
     root = root.resolve()
+    if not root.is_dir():
+        print(f"error: no such challenge root: {root}", file=sys.stderr)
+        return 2
     problems: list[tuple[str, str]] = []
     meta_files = sorted(root.rglob("challenge.json"))
     for meta_file in meta_files:
@@ -76,6 +99,14 @@ def audit(root: Path) -> int:
                         )
 
     print(f"audited {len(meta_files)} challenge(s) under {root}")
+    if not meta_files:
+        # An empty audit must never read as a clean one.
+        print(
+            f"error: no challenge.json under {root}; pass --root with the set you "
+            "mean to audit",
+            file=sys.stderr,
+        )
+        return 2
     if not problems:
         print("ok: no flag leaks in the files copied into the sandbox")
         return 0
@@ -86,7 +117,8 @@ def audit(root: Path) -> int:
 
 
 def main(argv: list[str]) -> int:
-    return audit(Path(argv[1] if len(argv) > 1 else DEFAULT_ROOT))
+    args = parse_args(argv[1:])
+    return audit(Path(args.root))
 
 
 if __name__ == "__main__":

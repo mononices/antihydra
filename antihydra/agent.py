@@ -19,8 +19,15 @@ from .compaction import (
     safe_cut_index,
 )
 from .hints import HintBus
+from .images import (
+    MAX_IMAGES_PER_AGENT,
+    redact_image_parts,
+    render_attachment_text,
+    text_only_parts,
+)
 from .llm import LLMError, OpenRouterLLM, Reply
 from .prompts import (
+    FLAG_HINT_GENERIC,
     KEEP_GOING,
     WORKER_KEEP_GOING,
     initial_prompt,
@@ -54,6 +61,7 @@ class RunResult:
     error: str | None = None
     stall_events: int = 0
     compactions: int = 0
+    images: int = 0
 
 
 class Agent:
@@ -69,6 +77,9 @@ class Agent:
         max_rounds: int = 200,
         max_cost: float = 3.0,
         timeout: float = 300.0,
+        deadline: float | None = None,
+        max_command_timeout: float | None = None,
+        max_images: int = MAX_IMAGES_PER_AGENT,
         full_observations: int = 6,
         old_observation_limit: int = 2000,
         log_dir: str | Path = "logs",
@@ -89,6 +100,7 @@ class Agent:
         max_subtasks: int = 4,
         subtask_rounds: int = 30,
         subtask_cost: float = 0.75,
+        flag_hint: str = FLAG_HINT_GENERIC,
         compaction: CompactionConfig | None = None,
         compaction_llm: OpenRouterLLM | None = None,
         stall: StallConfig | None = None,
@@ -100,6 +112,12 @@ class Agent:
         self.max_rounds = max_rounds
         self.max_cost = max_cost
         self.timeout = timeout
+        self.deadline = deadline
+        self.max_command_timeout = max_command_timeout
+        self.max_images = max_images
+        self.flag_hint = flag_hint
+        self._images = 0
+        self._hint_cursor = 0
         self.full_observations = full_observations
         self.old_observation_limit = old_observation_limit
         self.log_dir = Path(log_dir)
@@ -149,6 +167,10 @@ class Agent:
             bus_source=self.bus_source,
             actor=self.label,
             spawn_subtask=self._spawn if self.allow_subtasks else None,
+            deadline=self.deadline,
+            max_command_timeout=self.max_command_timeout,
+            max_images=self.max_images,
+            vision_supported=self._vision_supported(),
         )
         transcript = Transcript(
             challenge=self.challenge.name,
@@ -160,7 +182,10 @@ class Agent:
         self._transcript = transcript
 
         first_message = self.custom_system_prompt or system_prompt(
-            self.challenge, self.timeout, coordinated=self.hints is not None
+            self.challenge,
+            self.timeout,
+            coordinated=self.hints is not None,
+            flag_hint=self.flag_hint,
         )
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": first_message},
@@ -191,6 +216,8 @@ class Agent:
                             {"role": "user", "content": f"[overseer] {incoming}"}
                         )
                         transcript.event("overseer", message=incoming)
+                self._inject_peer_hints(messages, transcript)
+                context.hint_cursor = max(context.hint_cursor, self._hint_cursor)
                 if rounds >= self.max_rounds:
                     reason = "max_rounds"
                     break
@@ -254,6 +281,10 @@ class Agent:
                             and '"status": "incorrect"' in observation
                         ):
                             self._emit_event("submit_failed", {"round": rounds})
+                        if call.name == "check_hints":
+                            self._hint_cursor = max(
+                                self._hint_cursor, context.hint_cursor
+                            )
                         self._check_flag(observation)
                         messages.append(
                             {
@@ -276,6 +307,7 @@ class Agent:
                         state.solved or state.stalled
                     ):
                         messages.append({"role": "user", "content": stall_message})
+                    self._attach_pending_images(messages, context, rounds, transcript)
                 else:
                     messages.append(
                         {"role": "assistant", "content": reply.content or ""}
@@ -313,6 +345,7 @@ class Agent:
             rounds=rounds,
             cost=round(own_cost, 6),
             solved=state.solved,
+            images=self._images,
         )
         self._emit_event(
             "finished", {"reason": reason, "rounds": rounds, "cost": round(own_cost, 6)}
@@ -326,10 +359,10 @@ class Agent:
         transcript_path = transcript.save(
             self.log_dir,
             f"{time.strftime('%Y%m%d-%H%M%S')}__{safe_name[:90]}.json",
-            messages=messages,
+            messages=redact_image_parts(messages),
             notes=self.blackboard.read() if self.blackboard else "",
             summaries=self._summaries,
-            compacted_messages=self._compacted_archive,
+            compacted_messages=redact_image_parts(self._compacted_archive),
             total_cost=round(self.ledger.total, 6),
         )
         self._transcript = None
@@ -344,7 +377,74 @@ class Agent:
             error=error,
             stall_events=self._stall_events,
             compactions=self._compactions,
+            images=self._images,
         )
+
+    def _vision_supported(self) -> bool | None:
+        """Vision capability from the model client, when it reports one."""
+        probe = getattr(self.llm, "supports_images", None)
+        if not callable(probe):
+            return None
+        try:
+            return probe()
+        except Exception:  # noqa: BLE001 - capability probing must never break a run
+            return None
+
+    def _inject_peer_hints(self, messages: list[dict[str, Any]], transcript) -> None:
+        """Push fresh peer findings so the hint bus is not pull-only."""
+        if self.hints is None:
+            return
+        fresh = self.hints.since(self._hint_cursor, exclude_source=self.bus_source)
+        if not fresh:
+            return
+        self._hint_cursor = self.hints.last_id()
+        self.hints.note_read()
+        shown = fresh[:3]
+        lines = [
+            f"- {hint.source} ({hint.kind}): {clip(hint.text, 400)}" for hint in shown
+        ]
+        if len(fresh) > len(shown):
+            lines.append(
+                f"- ... {len(fresh) - len(shown)} more peer findings (call check_hints)"
+            )
+        messages.append(
+            {
+                "role": "user",
+                "content": (
+                    "[peer findings] other attempts on this challenge published:\n"
+                    + "\n".join(lines)
+                    + "\nUse these; publish your own durable findings with "
+                    "publish_insight so the other lanes benefit too."
+                ),
+            }
+        )
+        transcript.event("peer_hints", count=len(fresh), shown=len(shown))
+        self._say(f"{self._prefix()}peer findings: {len(fresh)} new")
+
+    def _attach_pending_images(
+        self, messages: list[dict[str, Any]], context: AgentContext, rounds: int, transcript
+    ) -> None:
+        """Turn the round's view_image calls into one multimodal user message."""
+        pending = list(context.pending_images)
+        if not pending:
+            return
+        context.pending_images.clear()
+        parts: list[dict[str, Any]] = [
+            {"type": "text", "text": render_attachment_text(pending)}
+        ]
+        parts.extend(image.content_part() for image in pending)
+        messages.append({"role": "user", "content": parts})
+        for image in pending:
+            transcript.event(
+                "image",
+                round=rounds,
+                path=image.path,
+                media_type=image.media_type,
+                bytes=image.bytes,
+                detail=image.detail,
+            )
+        self._images += len(pending)
+        self._say(f"{self._prefix()}attached {len(pending)} image(s) to the next round")
 
     def _maybe_compact(self, messages, round_no, transcript) -> list[dict[str, Any]]:
         config = self.compaction
@@ -476,13 +576,14 @@ class Agent:
         if self._stall_events >= 2:
             return (
                 f"[stall detector] You are still repeating the same call ({occurrences}x: "
-                f"{call_preview}). Change technique or tool, re-read the findings board, "
-                "or call giveup."
+                f"{call_preview}). Change technique or tool, read the notes board and "
+                "call check_hints for peer findings, then try a different approach."
             )
         return (
             f"[stall detector] The same call has now been made {occurrences} times with "
             f"identical arguments ({call_preview}). It will not produce a different result. "
-            "Review the findings board and change approach."
+            "Re-read the findings board, call check_hints for peer findings, and change "
+            "approach."
         )
 
     def _spawn(
@@ -514,6 +615,9 @@ class Agent:
             max_rounds=rounds_cap,
             max_cost=budget,
             timeout=self.timeout,
+            deadline=self.deadline,
+            max_command_timeout=self.max_command_timeout,
+            max_images=max(self.max_images - self._images, 0),
             full_observations=self.full_observations,
             old_observation_limit=self.old_observation_limit,
             log_dir=self.log_dir,
@@ -525,7 +629,10 @@ class Agent:
             bus_source=self.bus_source,
             label=label,
             system_prompt=worker_system_prompt(
-                self.challenge, self.timeout, coordinated=self.hints is not None
+                self.challenge,
+                self.timeout,
+                coordinated=self.hints is not None,
+                flag_hint=self.flag_hint,
             ),
             task=worker_initial_prompt(self.challenge, task),
             allow_subtasks=False,
@@ -608,9 +715,10 @@ class Agent:
         }
 
     def _prepare_messages(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Shorten older tool outputs; tool-call/result pairs are never dropped."""
+        """Shorten older tool outputs and drop stale images from the request."""
         prepared: list[dict[str, Any]] = []
         tool_count = 0
+        image_budget = self.full_observations
         for message in reversed(messages):
             if message.get("role") == "tool":
                 tool_count += 1
@@ -622,6 +730,16 @@ class Agent:
                             "content": content[: self.old_observation_limit]
                             + "\n... [earlier output trimmed]",
                         }
+            elif message.get("role") == "user" and isinstance(
+                message.get("content"), list
+            ):
+                if image_budget > 0:
+                    image_budget -= 1
+                else:
+                    message = {
+                        **message,
+                        "content": text_only_parts(message["content"]),
+                    }
             prepared.append(message)
         prepared.reverse()
         return prepared

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 from collections import Counter
@@ -86,8 +87,23 @@ def report_lane(lane_dir: Path) -> None:
         print("   *", " ".join(thought.split())[:300])
 
 
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument(
+        "race",
+        nargs="?",
+        default=None,
+        help="a race directory, or a directory of races (default: logs/races)",
+    )
+    return parser.parse_args(argv)
+
+
 def main(argv: list[str]) -> int:
-    base = Path(argv[1]) if len(argv) > 1 else Path("logs/races")
+    args = parse_args(argv[1:])
+    base = Path(args.race) if args.race else Path("logs/races")
+    if not base.is_dir():
+        print(f"error: no such race directory: {base}", file=sys.stderr)
+        return 2
     race = base if (base / "race-summary.json").is_file() else newest_race(base)
     summary_path = race / "race-summary.json"
     if summary_path.is_file():

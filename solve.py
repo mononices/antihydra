@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import time
 from pathlib import Path
 
 from antihydra.agent import Agent
@@ -105,6 +106,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--max-cost", type=float, default=3.0, help="USD budget per run"
     )
+    parser.add_argument(
+        "--max-minutes",
+        type=float,
+        default=None,
+        help="wall-clock budget for the run; long commands are clamped to it",
+    )
     parser.add_argument("--temperature", type=float, default=0.7)
     parser.add_argument(
         "--reasoning-effort",
@@ -113,7 +120,23 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--max-tokens", type=int, default=4096)
     parser.add_argument(
+        "--flag-hint",
+        choices=["generic", "branded"],
+        default="generic",
+        help="prompt flag crib: 'generic' shape (default) or the literal "
+        "'branded' prefix from challenge.json",
+    )
+    parser.add_argument(
         "--timeout", type=float, default=300.0, help="default command timeout (s)"
+    )
+    parser.add_argument(
+        "--max-command-timeout",
+        type=float,
+        default=600.0,
+        help=(
+            "hard ceiling for one run_command, even when the model asks for more "
+            "(default: %(default)s)"
+        ),
     )
     parser.add_argument("--log-dir", default="logs")
     parser.add_argument(
@@ -240,7 +263,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"compose:   {challenge.compose_file() or '-'}")
             print(f"flag hint: {challenge.flag_format_hint() or '-'}")
             print("\n----- system prompt -----\n")
-            print(system_prompt(challenge, args.timeout))
+            print(system_prompt(challenge, args.timeout, flag_hint=args.flag_hint))
             print("\n----- initial prompt -----\n")
             print(initial_prompt(challenge))
             return 0
@@ -254,9 +277,17 @@ def main(argv: list[str] | None = None) -> int:
         if not args.no_service and not args.dry_run and challenge.compose_file():
             print(f"starting challenge service ({challenge.compose_file()})")
             service = challenge.start_service(docker)
-            target = challenge.discover_local_target(docker)
-            if target:
-                print(f"service reachable from the sandbox at {target}")
+            services = challenge.discover_local_targets(docker, args.network)
+            if services:
+                print(
+                    "service reachable from the sandbox at "
+                    + ", ".join(entry.label for entry in services)
+                )
+            else:
+                print(
+                    f"warning: no service of this stack is attached to "
+                    f"{args.network}; the sandbox has no reachable target"
+                )
 
         sandbox = Sandbox(
             image=args.image,
@@ -273,7 +304,9 @@ def main(argv: list[str] | None = None) -> int:
 
             if args.dry_run:
                 print("\n----- system prompt -----\n")
-                print(system_prompt(challenge, args.timeout))
+                print(
+                    system_prompt(challenge, args.timeout, flag_hint=args.flag_hint)
+                )
                 print("\n----- initial prompt -----\n")
                 print(initial_prompt(challenge))
                 probe = sandbox.exec("pwd && uname -m && ls -la ctf_files", timeout=60)
@@ -326,6 +359,12 @@ def main(argv: list[str] | None = None) -> int:
                 max_rounds=args.max_rounds,
                 max_cost=args.max_cost,
                 timeout=args.timeout,
+                deadline=(
+                    time.monotonic() + args.max_minutes * 60
+                    if args.max_minutes
+                    else None
+                ),
+                max_command_timeout=args.max_command_timeout,
                 log_dir=args.log_dir,
                 quiet=args.quiet,
                 ledger=ledger,
@@ -339,6 +378,7 @@ def main(argv: list[str] | None = None) -> int:
                     enabled=not args.no_stall_detection,
                     repeat=args.stall_repeat,
                 ),
+                flag_hint=args.flag_hint,
             )
             print(f"model: {normalize_model(args.model)}")
             result = agent.run()
@@ -347,6 +387,7 @@ def main(argv: list[str] | None = None) -> int:
                 f"\nresult: {status} ({result.reason}) "
                 f"rounds={result.rounds} cost=${ledger.total:.4f} "
                 f"notes={len(blackboard.search())} "
+                f"images={result.images} "
                 f"stalls={result.stall_events} compactions={result.compactions}"
             )
             if result.flag:

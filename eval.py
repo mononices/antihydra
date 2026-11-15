@@ -13,7 +13,7 @@ from pathlib import Path
 from antihydra.challenge import Challenge, ChallengeError, discover, resolve
 from antihydra.compaction import CompactionConfig
 from antihydra.env import load_dotenv
-from antihydra.evaluation import EvalConfig, run_eval
+from antihydra.evaluation import EvalConfig, prebuild_images, run_eval
 from antihydra.llm import REASONING_EFFORTS, LLMError
 from antihydra.overseer import OverseerConfig
 from antihydra.racing import Lane, RaceCoordinator, lane_label, load_lane_specs
@@ -59,6 +59,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--skip-existing", action="store_true", help="reuse existing race summaries"
     )
     parser.add_argument(
+        "--skip-build-errors",
+        action="store_true",
+        help=(
+            "continue when a challenge image fails to build instead of aborting; "
+            "the affected challenges stop before spending anything"
+        ),
+    )
+    parser.add_argument(
         "--include-remote-only",
         action="store_true",
         help="run challenges that declare a remote service but ship no local compose file",
@@ -75,6 +83,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--reasoning-effort", default=None, help="default lane reasoning effort"
+    )
+    parser.add_argument(
+        "--flag-hint",
+        choices=["generic", "branded"],
+        default=None,
+        help="how prompts describe the flag: 'generic' shape (default) or the "
+        "literal 'branded' prefix from challenge.json",
     )
     parser.add_argument(
         "--lane-max-cost", type=float, default=None, help="USD cap per lane"
@@ -97,6 +112,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--lane-memory", default="4g", help="memory limit per lane")
     parser.add_argument(
         "--timeout", type=float, default=300.0, help="command timeout per lane"
+    )
+    parser.add_argument(
+        "--max-command-timeout",
+        type=float,
+        default=600.0,
+        help=(
+            "hard ceiling for one run_command, even when the model asks for more "
+            "(default 600s); commands are also clamped to the remaining race budget"
+        ),
     )
     parser.add_argument(
         "--max-minutes", type=float, default=None, help="per-challenge time cap"
@@ -190,6 +214,7 @@ def main(argv: list[str] | None = None) -> int:
             lanes_file,
             temperature=args.temperature,
             reasoning_effort=args.reasoning_effort,
+            flag_hint=args.flag_hint,
             max_cost=args.lane_max_cost,
             max_rounds=args.max_rounds,
             no_subtasks=args.no_subtasks,
@@ -255,8 +280,34 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     stop_event = threading.Event()
+    eval_dir = Path(args.eval_dir) / f"{time.strftime('%Y%m%d-%H%M%S')}__eval"
+    build_failures = prebuild_images(
+        docker, challenges, eval_dir, skip_existing=args.skip_existing
+    )
+    if build_failures and not args.skip_build_errors:
+        print(
+            f"error: {len(build_failures)} challenge image(s) failed to build:",
+            file=sys.stderr,
+        )
+        for directory, message in build_failures.items():
+            print(f"  {directory}: {message}", file=sys.stderr)
+        return 3
+    if build_failures:
+        print(
+            "warning: continuing past "
+            f"{len(build_failures)} failed build(s):",
+            file=sys.stderr,
+        )
+        for directory in build_failures:
+            print(f"  {directory}", file=sys.stderr)
+        print("  see build.log in each race dir", file=sys.stderr)
 
     def coordinator_factory(challenge: Challenge, run_dir: Path) -> RaceCoordinator:
+        if str(challenge.directory) in build_failures:
+            raise ChallengeError(
+                f"challenge images were not built; see {run_dir / 'build.log'}"
+            )
+
         def lane_factory(spec, lane_dir, emit, hints):
             return Lane(
                 spec,
@@ -271,6 +322,7 @@ def main(argv: list[str] | None = None) -> int:
                 memory=args.lane_memory,
                 platform=args.platform,
                 timeout=args.timeout,
+                max_command_timeout=args.max_command_timeout,
                 log_dir=lane_dir,
                 sandbox_label=lane_label(run_dir.name, spec),
                 emit=emit,
@@ -288,6 +340,7 @@ def main(argv: list[str] | None = None) -> int:
             network=args.network,
             memory=args.lane_memory,
             start_service=True,
+            build_images=False,
             follow=not args.no_follow,
             overseer=runtime.overseer(overseer_config) if overseer_config else None,
             max_minutes=args.max_minutes,
@@ -295,7 +348,6 @@ def main(argv: list[str] | None = None) -> int:
             stop_event=stop_event,
         )
 
-    eval_dir = Path(args.eval_dir) / f"{time.strftime('%Y%m%d-%H%M%S')}__eval"
     try:
         summary = run_eval(
             challenges,
@@ -309,6 +361,9 @@ def main(argv: list[str] | None = None) -> int:
                 skip_existing=args.skip_existing,
                 concurrency=args.concurrency,
                 comment=args.comment,
+                root=str(args.root),
+                network=args.network,
+                flag_hint=specs[0].flag_hint if specs else "generic",
             ),
         )
     except (ChallengeError, SandboxError, LLMError, OSError) as exc:

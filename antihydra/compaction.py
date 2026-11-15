@@ -42,12 +42,21 @@ Conversation to compress:
 
 
 def estimate_tokens(messages: list[dict]) -> int:
-    """Rough token estimate from total character count."""
+    """Rough token estimate from total character count (images included)."""
     total = 0
     for message in messages:
         content = message.get("content")
         if isinstance(content, str):
             total += len(content)
+        elif isinstance(content, list):
+            for part in content:
+                if not isinstance(part, dict):
+                    continue
+                if part.get("type") == "image_url":
+                    url = str((part.get("image_url") or {}).get("url") or "")
+                    total += len(url)
+                else:
+                    total += len(str(part.get("text") or ""))
         for call in message.get("tool_calls") or []:
             function = call.get("function") or {}
             total += len(str(function.get("arguments") or ""))
@@ -78,6 +87,19 @@ def _render_message(message: dict, clip_chars: int) -> str:
     role = str(message.get("role") or "?")
     content = message.get("content")
     content_text = content if isinstance(content, str) else ""
+    if isinstance(content, list):
+        rendered_parts = []
+        images = 0
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            if part.get("type") == "image_url":
+                images += 1
+                continue
+            rendered_parts.append(str(part.get("text") or ""))
+        content_text = " ".join(rendered_parts)
+        if images:
+            content_text += f" [{images} image(s) were attached here]"
     parts = [f"{role.upper()}: {clip(content_text.strip(), clip_chars)}"]
     for call in message.get("tool_calls") or []:
         function = call.get("function") or {}
@@ -109,8 +131,10 @@ def build_prompt(
 
 def archive_messages(messages: list[dict], clip_chars: int = 4000) -> list[dict]:
     """Copy dropped messages for the transcript, clipping huge contents."""
+    from .images import redact_image_parts
+
     archived: list[dict] = []
-    for message in messages:
+    for message in redact_image_parts(messages):
         item = dict(message)
         content = item.get("content")
         if isinstance(content, str):

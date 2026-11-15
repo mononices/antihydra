@@ -4,10 +4,15 @@
 # live here and are applied at load time by antihydra/challenge.py.
 #
 # Keys are "<category>/<directory name>" (the directory, not the metadata name,
-# so a wrong name field cannot hide an entry). Allowed fields are "files" and
-# "name"; a flag can never be overridden. A key that matches no challenge warns,
-# and a listed file that does not exist fails the run instead of silently
-# handing the agent an empty challenge.
+# so a wrong name field cannot hide an entry). Allowed fields are "files",
+# "name" and "build_files"; a flag can never be overridden. A key that matches
+# no challenge warns, and a listed file that does not exist fails the run
+# instead of silently handing the agent an empty challenge.
+#
+# "build_files" maps a path inside the docker build context to a corrected copy
+# kept in this repo (normally under fixes/). The loader stages the context under
+# .cache/build-contexts/ and overwrites those files there, so compose builds and
+# starts from the corrected copy while competition/ stays untouched.
 
 ["crypto/manual-distress-signal"]
 # challenge.json lists "dist/scrambled", which is echoes-of-DES-tiny's artifact;
@@ -29,3 +34,12 @@ files = ["infra/overflow_me"]
 # which makes --challenge "power-up" ambiguous and lets name-keyed summary.json
 # results overwrite each other. Directory name is the stable identity.
 name = "gradebook"
+
+["pwn/saint_vespers_and_the_copper_choir"]
+# build/Dockerfile installs the compiler with --no-install-recommends, but on
+# Ubuntu the C headers (libc6-dev) are only a Recommends of gcc, so the image
+# never builds: "/build/vespers.c:10:10: fatal error: stdio.h: No such file or
+# directory". fixes/saint-vespers/Dockerfile adds libc6-dev to the build
+# stage only; the build runs from a staged context so competition/ stays as
+# shipped.
+build_files = { "build/Dockerfile" = "fixes/saint-vespers/Dockerfile" }

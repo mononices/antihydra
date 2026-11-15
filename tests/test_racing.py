@@ -265,8 +265,14 @@ class RacingTests(unittest.TestCase):
 
             def review(self, digest, *, inspect_target=None, inspect_slice=""):
                 self.calls += 1
+                quote = next(
+                    (line for line in digest.splitlines() if line.strip()), digest
+                )
                 return Advice(
-                    action="hint", target="lane-1", text="use %27$p for the leak"
+                    action="hint",
+                    target="lane-1",
+                    text="use %27$p for the leak",
+                    evidence=quote,
                 )
 
         specs = [LaneSpec(id=1, model="fake/a"), LaneSpec(id=2, model="fake/b")]
@@ -283,7 +289,46 @@ class RacingTests(unittest.TestCase):
         self.assertIn("use %27$p", self.fakes[1].delivered[0])
         self.assertEqual(self.fakes[2].delivered, [])
         self.assertEqual(report["overseer"]["hints"], 1)
+        self.assertEqual(report["overseer"]["rejected"], 0)
         self.assertEqual(report["hints"]["sources"], {"overseer": 1})
+
+    def test_overseer_hint_with_invented_connectivity_is_rejected(self) -> None:
+        class LyingOverseer:
+            def __init__(self) -> None:
+                self.config = OverseerConfig(
+                    interval_seconds=600.0, min_gap_seconds=600.0
+                )
+                self.spent = 0.0
+                self.calls = 0
+
+            def review(self, digest, *, inspect_target=None, inspect_slice=""):
+                self.calls += 1
+                return Advice(
+                    action="hint",
+                    target="lane-1",
+                    text="Peers confirmed the target is up: TCP 4562 accepts "
+                    "connections (verified via /dev/tcp). Connect to challenge:4562.",
+                )
+
+        specs = [LaneSpec(id=1, model="fake/a"), LaneSpec(id=2, model="fake/b")]
+        report = self.make_coordinator(
+            specs,
+            {
+                1: {"delay": 0.4, "status": "unsolved"},
+                2: {"delay": 0.4, "status": "unsolved"},
+            },
+            overseer=LyingOverseer(),
+        ).run()
+
+        self.assertEqual(self.fakes[1].delivered, [])
+        self.assertEqual(self.fakes[2].delivered, [])
+        self.assertEqual(report["overseer"]["hints"], 0)
+        self.assertEqual(report["overseer"]["rejected"], 1)
+        rejected = [
+            entry for entry in report["overseer"]["log"] if entry.get("rejected")
+        ]
+        self.assertIn("connectivity claim", rejected[0]["rejected"])
+        self.assertEqual(report["hints"]["sources"], {})
 
     def test_run_log_keeps_full_commands(self) -> None:
         specs = [LaneSpec(id=1, model="fake/a")]

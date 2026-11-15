@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -26,8 +27,37 @@ COMPOSE_NAMES = (
     "compose.yaml",
 )
 
-OVERRIDES_FILE = Path(__file__).resolve().parent.parent / "overrides.toml"
-OVERRIDE_FIELDS = ("files", "name")
+# Compose files in the dataset are YAML or JSON; match the key in both flavours.
+COMPOSE_BUILD_PATTERN = re.compile(r"""(?:^|[{,])\s*['"]?build['"]?\s*:""", re.M)
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+OVERRIDES_FILE = REPO_ROOT / "overrides.toml"
+OVERRIDE_FIELDS = ("files", "name", "build_files")
+# Staged copies of a challenge's build context live here, never in competition/.
+BUILD_CONTEXT_ROOT = REPO_ROOT / ".cache" / "build-contexts"
+
+# Characters no filesystem path component may contain; Windows is strictest.
+ILLEGAL_PATH_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+WINDOWS_RESERVED_NAMES = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    *(f"COM{index}" for index in range(1, 10)),
+    *(f"LPT{index}" for index in range(1, 10)),
+}
+
+
+def safe_dir_name(name: str, *, fallback: str = "challenge") -> str:
+    """Filesystem-safe directory name for a challenge (names may contain ':'").
+
+    ``Breach: Zero Day`` cannot be a Windows path component, and a dropped
+    challenge is worse than an ugly directory name.
+    """
+    safe = ILLEGAL_PATH_CHARS.sub("-", str(name)).strip().strip(".")
+    if safe.split(".")[0].upper() in WINDOWS_RESERVED_NAMES:
+        safe = f"{safe}_"
+    return safe or fallback
 
 
 class ChallengeError(RuntimeError):
@@ -41,6 +71,9 @@ class Challenge:
     directory: Path
     metadata: dict[str, Any] = field(repr=False)
     local_target: str | None = None
+    local_services: tuple["ServiceTarget", ...] = ()
+    local_discovery: bool = False
+    staged_context: Path | None = field(default=None, repr=False, compare=False)
 
     @property
     def name(self) -> str:
@@ -103,21 +136,65 @@ class Challenge:
         """Declares a public service but ships no compose stack to run locally."""
         return self.server_host is not None and self.compose_file() is None
 
+    def reachable_services(self) -> list["ServiceTarget"]:
+        """Every service the sandbox can use, best first (empty when unknown).
+
+        A started stack wins over the public address from ``challenge.json``,
+        which is not necessarily reachable from inside the sandbox network.
+        """
+        if self.local_services:
+            return list(self.local_services)
+        if self.local_target:
+            parsed = _target_from_address(self.local_target)
+            return [parsed] if parsed else []
+        if self.local_discovery:
+            return []  # asked docker: nothing of this stack sits on our network
+        if self.is_remote_only():
+            return []
+        if self.server_host and self.server_port:
+            return [ServiceTarget(self.server_host, self.server_port, "")]
+        return []
+
+    def reachable_targets(self) -> list[str]:
+        """Addresses the sandbox can use, best first."""
+        return [service.address for service in self.reachable_services()]
+
     def reachable_target(self) -> str | None:
         """Address the sandbox can actually use: the started compose service."""
-        if self.local_target:
-            return self.local_target
-        if self.is_remote_only():
-            return None
-        return self.target_line()
+        targets = self.reachable_targets()
+        return targets[0] if targets else None
 
-    def discover_local_target(self, docker: str) -> str | None:
-        """Resolve the started stack to an address usable from inside ctfnet.
+    def discover_local_targets(
+        self, docker: str, network: str | None = None
+    ) -> list["ServiceTarget"]:
+        """Resolve the started stack to services usable inside ``network``.
 
-        Compose publishes host ports, but the sandbox sits on the challenge
-        network, where the container listens on its own port. The stack's network
-        aliases carry the public hostname.
+        Only containers attached to the sandbox's own network are reachable, and
+        only the aliases they carry on that network resolve. A private backing
+        service (an admin relay on its own network) must never be advertised as
+        the challenge target.
         """
+        self.local_services = ()
+        self.local_target = None
+        containers = self._service_containers(docker)
+        if containers is None:
+            return []
+        self.local_discovery = True
+        services = _local_targets_from(containers, self, network)
+        if services:
+            self.local_services = tuple(services)
+            self.local_target = services[0].address
+        return services
+
+    def discover_local_target(
+        self, docker: str, network: str | None = None
+    ) -> str | None:
+        """Primary reachable address of the started stack (see discovery above)."""
+        self.discover_local_targets(docker, network)
+        return self.local_target
+
+    def _service_containers(self, docker: str) -> Any | None:
+        """``docker inspect`` payload for the stack's containers, or None."""
         compose = self.compose_file()
         if compose is None:
             return None
@@ -134,11 +211,9 @@ class Challenge:
         if proc.returncode != 0:
             return None
         try:
-            containers = json.loads(proc.stdout.decode("utf-8", "replace"))
+            return json.loads(proc.stdout.decode("utf-8", "replace"))
         except json.JSONDecodeError:
             return None
-        self.local_target = _local_target_from(containers, self)
-        return self.local_target
 
     def local_files(self) -> list[Path]:
         found: list[Path] = []
@@ -184,15 +259,70 @@ class Challenge:
         return False
 
     def compose_file(self) -> Path | None:
-        for base in (self.directory, self.directory / "infra"):
+        """Compose file to build and run from (staged copy when patched)."""
+        root = self.build_context()
+        for base in (root, root / "infra"):
             for name in COMPOSE_NAMES:
                 candidate = base / name
                 if candidate.is_file():
                     return candidate
         return None
 
+    @property
+    def build_files(self) -> dict[str, str]:
+        """Context files replaced from host copies (dataset corrections)."""
+        raw = self.metadata.get("build_files") or {}
+        if not isinstance(raw, dict):
+            return {}
+        return {str(key): str(value) for key, value in raw.items()}
+
+    def build_context(self) -> Path:
+        """Directory docker builds from: the dataset, or a patched staged copy.
+
+        ``competition/`` is read-only, so a broken build file is corrected by
+        copying the context under ``.cache/build-contexts/`` and overwriting the
+        listed files there.
+        """
+        patches = self.build_files
+        if not patches:
+            return self.directory
+        if self.staged_context is not None:
+            return self.staged_context
+        staged = BUILD_CONTEXT_ROOT / safe_dir_name(
+            f"{self.category}_{self.directory.name}"
+        )
+        if staged.exists():
+            shutil.rmtree(staged)
+        staged.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(self.directory, staged)
+        for relative, source in patches.items():
+            origin = Path(source)
+            if not origin.is_absolute():
+                origin = (REPO_ROOT / origin).resolve()
+                try:
+                    origin.relative_to(REPO_ROOT)
+                except ValueError as exc:
+                    raise ChallengeError(
+                        f"build_files source {source!r} must live inside the repo"
+                    ) from exc
+            if not origin.is_file():
+                raise ChallengeError(
+                    f"build_files source {source!r} for {self.name!r} does not exist"
+                )
+            target = (staged / relative).resolve()
+            try:
+                target.relative_to(staged.resolve())
+            except ValueError as exc:
+                raise ChallengeError(
+                    f"build_files target {relative!r} escapes the build context"
+                ) from exc
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(origin, target)
+        self.staged_context = staged
+        return staged
+
     def start_service(
-        self, docker: str, *, wait: float = 0.0
+        self, docker: str, *, wait: float = 0.0, build: bool = True
     ) -> "ChallengeService | None":
         """Start the challenge's docker-compose stack, if it has one."""
         compose = self.compose_file()
@@ -205,48 +335,177 @@ class Challenge:
             "-d",
             "--remove-orphans",
         ]
+        if not build:
+            command.append("--no-build")
         proc = subprocess.run(command, cwd=str(compose.parent), capture_output=True)
         if proc.returncode != 0:
             raise ChallengeError(
-                "failed to start challenge service:\n"
-                + proc.stderr.decode("utf-8", "replace").strip()
+                "failed to start challenge service:\n" + _compose_output(proc)
             )
         if wait > 0:
             time.sleep(wait)
         return ChallengeService(compose_file=compose, docker=docker)
 
+    def build_images(self, docker: str, *, log_path: Path | None = None) -> None:
+        """Build the challenge's compose images; nothing starts yet.
 
-def _local_target_from(containers: Any, challenge: "Challenge") -> str | None:
-    """Pick ``<network alias or service>:<container port>`` from docker inspect."""
-    for container in containers if isinstance(containers, list) else []:
-        config = container.get("Config") or {}
-        exposed = [
-            str(key).split("/")[0]
-            for key in (config.get("ExposedPorts") or {})
-            if str(key).split("/")[0].isdigit()
-        ]
-        if not exposed:
+        Pull-only stacks (no ``build`` key) are left alone: their images are
+        fetched by ``up``, and ``--no-build`` does not stop compose pulling.
+        """
+        compose = self.compose_file()
+        if compose is None:
+            return
+        try:
+            text = compose.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise ChallengeError(f"cannot read {compose}: {exc}") from exc
+        if not COMPOSE_BUILD_PATTERN.search(text):
+            if log_path is not None:
+                _write_log(log_path, "no build section; image comes from a registry\n")
+            return
+        command = _compose_command(docker) + ["-f", str(compose), "build"]
+        proc = subprocess.run(command, cwd=str(compose.parent), capture_output=True)
+        output = _compose_output(proc)
+        if log_path is not None:
+            _write_log(log_path, output)
+        if proc.returncode != 0:
+            raise ChallengeError(
+                f"failed to build challenge images in {compose.parent}:\n"
+                + _error_tail(output)
+            )
+
+
+@dataclass(frozen=True)
+class ServiceTarget:
+    """One started compose service, addressed the way the sandbox must reach it."""
+
+    host: str
+    port: int
+    service: str = ""
+
+    @property
+    def address(self) -> str:
+        return f"{self.host}:{self.port}"
+
+    @property
+    def label(self) -> str:
+        """``host:port`` plus the compose service name when that adds information."""
+        if self.service and self.service != self.host:
+            return f"{self.address} ({self.service})"
+        return self.address
+
+
+def _target_from_address(address: str) -> "ServiceTarget | None":
+    """Parse ``host:port`` back into a target (for externally supplied values)."""
+    host, separator, port = str(address).rpartition(":")
+    if not separator or not host or not port.isdigit():
+        return None
+    return ServiceTarget(host, int(port))
+
+
+def _exposed_ports(container: Any) -> list[int]:
+    """Container ports from ``ExposedPorts`` (compose ``expose`` or Dockerfile)."""
+    config = container.get("Config") or {}
+    ports = {
+        int(str(key).split("/")[0])
+        for key in (config.get("ExposedPorts") or {})
+        if str(key).split("/")[0].isdigit()
+    }
+    return sorted(ports)
+
+
+def _network_aliases(container: Any, network: str | None) -> list[str]:
+    """Aliases a container carries, restricted to ``network`` when one is given."""
+    settings = (container.get("NetworkSettings") or {}).get("Networks") or {}
+    aliases: list[str] = []
+    for name, entry in settings.items():
+        if network is not None and str(name) != network:
             continue
-        port = (
-            str(challenge.server_port)
-            if str(challenge.server_port) in exposed
-            else exposed[0]
-        )
+        aliases.extend(str(alias) for alias in (entry or {}).get("Aliases") or [])
+    return aliases
+
+
+def _local_targets_from(
+    containers: Any, challenge: "Challenge", network: str | None = None
+) -> list[ServiceTarget]:
+    """Pick ``<network alias or service>:<container port>`` from docker inspect.
+
+    Without ``network`` every attached network counts (legacy behaviour). With
+    one, containers outside it are skipped: they exist, but the sandbox has no
+    route to them, and naming one sends the agent chasing an unresolvable host.
+    """
+    found: list[ServiceTarget] = []
+    seen: set[str] = set()
+    for container in containers if isinstance(containers, list) else []:
+        ports = _exposed_ports(container)
+        if not ports:
+            continue
+        aliases = _network_aliases(container, network)
+        if network is not None and not aliases:
+            continue
+        config = container.get("Config") or {}
         labels = config.get("Labels") or {}
         service = str(labels.get("com.docker.compose.service") or "")
-        networks = (container.get("NetworkSettings") or {}).get("Networks") or {}
-        aliases: list[str] = []
-        for network in networks.values():
-            aliases.extend(str(name) for name in (network.get("Aliases") or []))
-        unordered = [
-            name
-            for name in aliases
-            if name and name not in {"localhost", container.get("Name", "").lstrip("/")}
-        ]
-        unordered.sort(key=lambda name: name != challenge.server_host)
-        host = unordered[0] if unordered else (service or "localhost")
-        return f"{host}:{port}"
-    return None
+        skip = {"localhost", str(container.get("Name") or "").lstrip("/")}
+        candidates = [name for name in aliases if name and name not in skip]
+        # Docker always adds the service and container names as aliases; the
+        # alias a human wrote in compose is the dotted one, so prefer it.
+        candidates.sort(
+            key=lambda name: (name != challenge.server_host, "." not in name, name)
+        )
+        if candidates:
+            host = candidates[0]
+        elif service:
+            host = service
+        elif network is None:
+            host = "localhost"
+        else:
+            continue
+        port = (
+            challenge.server_port
+            if challenge.server_port in ports
+            else ports[0]
+        )
+        address = f"{host}:{port}"
+        if address in seen:
+            continue
+        seen.add(address)
+        found.append(ServiceTarget(host, int(port), service))
+
+    def rank(target: ServiceTarget) -> tuple[int, str, int]:
+        preferred = (
+            challenge.server_host is not None and target.host == challenge.server_host
+        ) or (
+            challenge.server_host is None
+            and challenge.server_port is not None
+            and target.port == challenge.server_port
+        )
+        return (0 if preferred else 1, target.host, target.port)
+
+    found.sort(key=rank)
+    return found
+
+
+def _compose_output(proc: subprocess.CompletedProcess) -> str:
+    """Compose writes build progress to stdout and failures to stderr."""
+    chunks = [
+        proc.stdout.decode("utf-8", "replace"),
+        proc.stderr.decode("utf-8", "replace"),
+    ]
+    return "\n".join(chunk.strip() for chunk in chunks if chunk.strip())
+
+
+def _error_tail(output: str, limit: int = 2500) -> str:
+    """The failing step is at the end of a long build log."""
+    text = output.strip()
+    if len(text) <= limit:
+        return text
+    return "...\n" + text[-limit:]
+
+
+def _write_log(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
 
 
 def _compose_command(docker: str) -> list[str]:
@@ -305,6 +564,16 @@ def _validate_override(key: str, entry: Any) -> dict[str, Any]:
             f"override {key!r} sets unsupported field(s) {unknown}; "
             f"allowed: {list(OVERRIDE_FIELDS)}"
         )
+    build_files = entry.get("build_files")
+    if build_files is not None:
+        if not isinstance(build_files, dict) or not all(
+            isinstance(name, str) and isinstance(source, str)
+            for name, source in build_files.items()
+        ):
+            raise ChallengeError(
+                f"override {key!r}: build_files must map context paths to source "
+                "files, e.g. { \"build/Dockerfile\" = \"fixes/x/Dockerfile\" }"
+            )
     return dict(entry)
 
 
@@ -336,6 +605,8 @@ def _apply_overrides(
     merged = dict(metadata)
     if "name" in entry:
         merged["name"] = str(entry["name"])
+    if "build_files" in entry:
+        merged["build_files"] = dict(entry["build_files"])
     if "files" in entry:
         raw = entry["files"]
         if isinstance(raw, str) or not isinstance(raw, (list, tuple)):

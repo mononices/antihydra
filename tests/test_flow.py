@@ -340,14 +340,22 @@ class FlowTests(unittest.TestCase):
 
         self.assertTrue(result.solved)
         data = json.loads(Path(result.transcript_path).read_text(encoding="utf-8"))
-        tool_messages = [
-            message for message in data["messages"] if message.get("role") == "tool"
+        # Peer findings are pushed automatically, so they arrive as a user message
+        # and check_hints reports that nothing is new on the explicit pull.
+        user_messages = [
+            message for message in data["messages"] if message.get("role") == "user"
         ]
         self.assertTrue(
             any(
                 "offset is 40" in str(message.get("content"))
-                for message in tool_messages
+                for message in user_messages
             )
+        )
+        tool_messages = [
+            message for message in data["messages"] if message.get("role") == "tool"
+        ]
+        self.assertTrue(
+            any('"count": 0' in str(message.get("content")) for message in tool_messages)
         )
 
 

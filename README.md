@@ -36,8 +36,14 @@ Autonomous racing-based LLM CTF solver: several models attack the same challenge
 - A hint bus lets lanes share findings with each other, and an **overseer**
   (`glm-5.3`, capped budget) pushes one curated hint into a lane that stalls or
   loses contact.
+- Overseer hints are not trusted as written: each one must quote the lane digest it
+  came from, may not claim a service is reachable unless the harness verified that
+  address, and is dropped if it repeats advice already delivered. Rejections land
+  in `race-summary.json` under `overseer.rejected` (see AGENTS.md for the recorded
+  cases that motivated this).
 - Tools run inside the sandbox: `run_command`, `create_file`, `read_file`,
-  `submit_flag`, `giveup`, `record_finding`, `get_findings`, `spawn_subtask`, `publish_insight`, `check_hints`.
+  `view_image`, `submit_flag`, `giveup`, `record_finding`, `get_findings`,
+  `spawn_subtask`, `publish_insight`, `check_hints`.
 - Flags are scanned out of tool output and verified host-side against `challenge.json`,
   so a lane cannot self-report success.
 - Budget and robustness: price catalog, per-lane cost/round caps, reasoning effort,

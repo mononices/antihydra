@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Sequence
 
-from .challenge import Challenge
+from .challenge import Challenge, safe_dir_name, ChallengeError
 
 COMPOSE_PORT_PATTERN = re.compile(r'^\s*-\s*"?(\d+):\d+"?\s*$')
 CONTAINER_NAME_PATTERN = re.compile(r"^\s*container_name:\s*(\S+)\s*$")
@@ -25,6 +25,16 @@ class EvalConfig:
     skip_existing: bool = False
     concurrency: int = 3
     comment: str = ""
+    # Recorded for audit: which dataset, which docker network and which flag
+    # crib produced these numbers decides whether they can be compared.
+    root: str = ""
+    network: str = "ctfnet"
+    flag_hint: str = "generic"
+
+
+def run_dir_name(index: int, challenge: Challenge) -> str:
+    """Per-challenge artifact directory: ``01__challenge-name`` (path-safe)."""
+    return f"{index:02d}__{safe_dir_name(challenge.name)}"
 
 
 def exclusive_resources(challenge: Challenge) -> set[str]:
@@ -45,6 +55,42 @@ def exclusive_resources(challenge: Challenge) -> set[str]:
         if name:
             resources.add(f"container:{name.group(1)}")
     return resources
+
+
+def prebuild_images(
+    docker: str,
+    challenges: Sequence[Challenge],
+    eval_dir: str | Path,
+    *,
+    skip_existing: bool = False,
+    say: Callable[[str], None] = print,
+) -> dict[str, str]:
+    """Build every challenge image up front; return failures by challenge directory.
+
+    Doing this before the race turns a mid-run build failure into an immediate,
+    visible error (and a ``build.log`` next to the race summary) instead of a
+    challenge that silently scores zero.
+    """
+    root = Path(eval_dir)
+    failures: dict[str, str] = {}
+    total = len(challenges)
+    for index, challenge in enumerate(challenges, start=1):
+        if challenge.compose_file() is None:
+            continue
+        run_dir = root / run_dir_name(index, challenge)
+        if skip_existing and (run_dir / "race-summary.json").is_file():
+            say(f"[build {index}/{total}] {challenge.name}: skipped (existing run)")
+            continue
+        log_path = run_dir / "build.log"
+        say(f"[build {index}/{total}] {challenge.name}: building ...")
+        try:
+            challenge.build_images(docker, log_path=log_path)
+        except ChallengeError as exc:
+            failures[str(challenge.directory)] = str(exc)
+            say(f"[build {index}/{total}] {challenge.name}: FAILED -> {log_path}")
+        else:
+            say(f"[build {index}/{total}] {challenge.name}: ok")
+    return failures
 
 
 def run_eval(
@@ -81,7 +127,7 @@ def run_eval(
         return resource_cache[index]
 
     def finish(index: int, challenge: Challenge, report: dict) -> None:
-        run_dir = eval_dir / f"{index:02d}__{challenge.name}"
+        run_dir = eval_dir / run_dir_name(index, challenge)
         flag = report.get("flag")
         if flag:
             (run_dir / "flag.txt").write_text(str(flag) + "\n", encoding="utf-8")
@@ -91,6 +137,8 @@ def run_eval(
             "solved": bool(report.get("solved")),
             "solved_by": report.get("solved_by_model"),
             "flag": flag,
+            "target": report.get("target"),
+            "targets": report.get("targets") or [],
             "cost": report.get("total_cost"),
             "overseer_cost": (report.get("overseer") or {}).get("cost"),
             "elapsed_seconds": report.get("elapsed_seconds"),
@@ -113,7 +161,7 @@ def run_eval(
         )
 
     def run_challenge(index: int, challenge: Challenge) -> None:
-        run_dir = eval_dir / f"{index:02d}__{challenge.name}"
+        run_dir = eval_dir / run_dir_name(index, challenge)
         summary_path = run_dir / "race-summary.json"
         try:
             if settings.skip_existing and summary_path.is_file():
@@ -138,9 +186,26 @@ def run_eval(
                     )
             finish(index, challenge, report)
         except Exception as exc:  # noqa: BLE001 - never leave a slot occupied
+            # A challenge must never vanish from the leaderboard: record the
+            # failure even when it happened after the race itself finished.
             with state_lock:
                 active_resources.difference_update(resources_for(index, challenge))
                 active.pop(index, None)
+                results[index] = {
+                    "challenge": challenge.name,
+                    "category": challenge.category,
+                    "solved": False,
+                    "solved_by": None,
+                    "flag": None,
+                    "cost": None,
+                    "overseer_cost": None,
+                    "elapsed_seconds": None,
+                    "k": None,
+                    "race_dir": str(run_dir),
+                    "race_summary": str(summary_path),
+                    "lanes": [],
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
             say(f"[{index}/{total}] {challenge.name}: unexpected error: {exc}")
 
     pending: list[tuple[int, Challenge]] = list(enumerate(challenges, start=1))
@@ -234,6 +299,9 @@ def run_eval(
             "max_total_cost": settings.max_total_cost,
             "concurrency": settings.concurrency,
             "skip_existing": settings.skip_existing,
+            "root": settings.root,
+            "network": settings.network,
+            "flag_hint": settings.flag_hint,
         },
         "results": ordered,
     }

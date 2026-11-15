@@ -11,8 +11,12 @@ from antihydra.overseer import (
     Overseer,
     OverseerConfig,
     build_digest,
+    check_hint_grounding,
+    evidence_grounded,
     evaluate_triggers,
     parse_advice,
+    similar_hint,
+    unverified_addresses,
 )
 from antihydra.racing import LaneState
 
@@ -135,6 +139,110 @@ class OverseerTests(unittest.TestCase):
         self.assertIsNone(overseer.review("digest"))
         self.assertEqual(overseer.calls, 1)
         self.assertEqual(overseer.review("digest").action, "none")
+
+    def test_advice_carries_evidence_and_strips_own_tag(self) -> None:
+        advice = parse_advice(
+            '{"action": "hint", "target": "lane-1", "text": "[overseer] try X", '
+            '"evidence": "lane-1 stalled: no tool call for 120s"}'
+        )
+
+        self.assertEqual(advice.text, "try X")
+        self.assertEqual(advice.evidence, "lane-1 stalled: no tool call for 120s")
+
+    def test_grounding_rejects_invented_connectivity(self) -> None:
+        digest = "lane-1 (glm) status=running rounds=40 cost=$0.10 remote=0 failed_submits=0"
+        # The exact hint that derailed the Music Security Department race.
+        report = check_hint_grounding(
+            text="Peers confirmed the target is up: TCP 4562 accepts connections; "
+            "connect to challenge:4562",
+            evidence="lane-1 (glm) status=running rounds=40",
+            grounds=digest,
+            verified=[],
+        )
+
+        self.assertFalse(report.ok)
+        self.assertIn("connectivity claim", report.reason)
+
+    def test_grounding_rejects_unverified_address_in_a_claim(self) -> None:
+        report = check_hint_grounding(
+            text="the admin relay at admin-relay:5000 listens for requests",
+            evidence="lane-1 (glm) status=running rounds=40",
+            grounds="lane-1 (glm) status=running rounds=40",
+            verified=["low-tide.chal.csaw.io:80"],
+        )
+
+        self.assertFalse(report.ok)
+        self.assertIn("admin-relay:5000", report.reason)
+
+    def test_grounding_accepts_verified_target_claim(self) -> None:
+        grounds = (
+            "verified targets: low-tide-lb.ctf.csaw.io:8080\n"
+            "lane-3 (ds) status=running rounds=22 cost=$0.05 remote=1"
+        )
+        report = check_hint_grounding(
+            text="low-tide-lb.ctf.csaw.io:8080 is reachable and answers /station/checkin",
+            evidence="lane-3 (ds) status=running rounds=22 cost=$0.05 remote=1",
+            grounds=grounds,
+            verified=["low-tide-lb.ctf.csaw.io:8080"],
+        )
+
+        self.assertTrue(report.ok, report.reason)
+
+    def test_grounding_requires_a_real_quote(self) -> None:
+        digest = "lane-1 (glm) status=running rounds=40 remote=0"
+        invented_evidence = check_hint_grounding(
+            text="try the tcache poisoning approach next",
+            evidence="lane-2 found a double free in the retire path",
+            grounds=digest,
+            verified=[],
+        )
+        unsupported = check_hint_grounding(
+            text="try the tcache poisoning approach next",
+            evidence=None,
+            grounds=digest,
+            verified=[],
+        )
+        # The fallback only passes hints that reuse the digest's own vocabulary;
+        # real hints should carry a quote, which is why the prompt demands one.
+        echoed = check_hint_grounding(
+            text="lane-1 status running rounds 40 remote 0",
+            evidence=None,
+            grounds=digest,
+            verified=[],
+        )
+
+        self.assertFalse(invented_evidence.ok)
+        self.assertIn("evidence", invented_evidence.reason)
+        self.assertFalse(unsupported.ok)
+        self.assertIn("no basis", unsupported.reason)
+        self.assertTrue(echoed.ok, echoed.reason)
+        self.assertTrue(
+            evidence_grounded("lane-1 (glm) status=running rounds=40", digest)
+        )
+
+    def test_grounding_rejects_repeats(self) -> None:
+        quote = "lane-1 (glm) status=running rounds=40 remote=0"
+        first = "free a charge then rewire the tcache fd to __free_hook and defuse /bin/sh"
+        second = "free a charge then rewire the tcache fd to __free_hook then defuse /bin/sh"
+        report = check_hint_grounding(
+            text=second,
+            evidence=quote,
+            grounds=quote,
+            verified=[],
+            previous=[first],
+        )
+
+        self.assertTrue(similar_hint(first, second))
+        self.assertFalse(report.ok)
+        self.assertIn("repeats", report.reason)
+
+    def test_unverified_addresses_skips_known_targets(self) -> None:
+        found = unverified_addresses(
+            "connect to low-tide.chal.csaw.io:80 and then scan 172.18.0.9:5000",
+            {"low-tide.chal.csaw.io:80"},
+        )
+
+        self.assertEqual(found, ["172.18.0.9:5000"])
 
 
 if __name__ == "__main__":

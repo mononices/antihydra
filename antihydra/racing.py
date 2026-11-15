@@ -22,8 +22,16 @@ from .blackboard import Blackboard
 from .challenge import Challenge
 from .compaction import CompactionConfig
 from .hints import HintBus
+from .images import MAX_IMAGES_PER_AGENT
 from .llm import REASONING_EFFORTS, OpenRouterLLM
-from .overseer import Advice, Overseer, build_digest, evaluate_triggers
+from .prompts import FLAG_HINT_GENERIC, FLAG_HINT_MODES
+from .overseer import (
+    Advice,
+    Overseer,
+    build_digest,
+    check_hint_grounding,
+    evaluate_triggers,
+)
 from .sandbox import (
     Sandbox,
     cleanup_orphans,
@@ -43,6 +51,7 @@ FALLBACK_TEMPERATURE = 0.7
 FALLBACK_REASONING_EFFORT = "max"
 FALLBACK_MAX_COST = 4.0
 FALLBACK_MAX_ROUNDS = 200
+FALLBACK_FLAG_HINT = FLAG_HINT_GENERIC
 MIN_REVIEW_GAP_SECONDS = 5.0
 
 
@@ -78,6 +87,7 @@ class LaneSpec:
     max_cost: float | None = None
     max_rounds: int | None = None
     no_subtasks: bool = False
+    flag_hint: str = FLAG_HINT_GENERIC
 
     @property
     def label(self) -> str:
@@ -97,6 +107,7 @@ class LaneResult:
     flag: str | None = None
     transcript: str | None = None
     error: str | None = None
+    images: int = 0
 
     def as_dict(self) -> dict:
         return {
@@ -109,6 +120,7 @@ class LaneResult:
             "flag": self.flag,
             "transcript": self.transcript,
             "error": self.error,
+            "images": self.images,
         }
 
 
@@ -162,6 +174,7 @@ def load_lane_specs(
     max_cost: float | None = None,
     max_rounds: int | None = None,
     no_subtasks: bool | None = None,
+    flag_hint: str | None = None,
 ) -> list[LaneSpec]:
     """Build lane specs from a TOML/JSON roster or model ids.
 
@@ -220,6 +233,14 @@ def load_lane_specs(
                         False,
                     )
                 ),
+                flag_hint=_flag_hint(
+                    _first(
+                        entry.get("flag_hint"),
+                        flag_hint,
+                        defaults.get("flag_hint"),
+                        FALLBACK_FLAG_HINT,
+                    )
+                ),
             )
         )
     return specs
@@ -263,6 +284,15 @@ def _effort(value) -> str:
     return effort
 
 
+def _flag_hint(value) -> str:
+    mode = str(value or FLAG_HINT_GENERIC).strip().lower()
+    if mode not in FLAG_HINT_MODES:
+        raise ValueError(
+            f"invalid flag hint {value!r}; use one of: {', '.join(FLAG_HINT_MODES)}"
+        )
+    return mode
+
+
 class Lane:
     """One solver attempt with its own sandbox, board, ledger, and transcript."""
 
@@ -279,6 +309,9 @@ class Lane:
         memory: str = "4g",
         platform: str = "linux/amd64",
         timeout: float = 300.0,
+        deadline: float | None = None,
+        max_command_timeout: float | None = None,
+        max_images: int = MAX_IMAGES_PER_AGENT,
         log_dir: str | Path,
         sandbox_label: str,
         emit: Callable[[str], None] | None = None,
@@ -297,6 +330,9 @@ class Lane:
         self.memory = memory
         self.platform = platform
         self.timeout = timeout
+        self.deadline = deadline
+        self.max_command_timeout = max_command_timeout
+        self.max_images = max_images
         self.log_dir = Path(log_dir)
         self.sandbox_label = sandbox_label
         self.emit = emit
@@ -318,6 +354,10 @@ class Lane:
         self._last_tool_at = 0.0
         self._recent: list[str] = []
         self._trace: list[str] = []
+
+    def set_deadline(self, deadline: float) -> None:
+        """Coordinator hook: absolute ``time.monotonic()`` budget for this lane."""
+        self.deadline = float(deadline)
 
     def run(self) -> LaneResult:
         ledger = self.ledger
@@ -348,6 +388,9 @@ class Lane:
                 max_rounds=self.spec.max_rounds or FALLBACK_MAX_ROUNDS,
                 max_cost=self.spec.max_cost or FALLBACK_MAX_COST,
                 timeout=self.timeout,
+                deadline=self.deadline,
+                max_command_timeout=self.max_command_timeout,
+                max_images=self.max_images,
                 log_dir=self.log_dir,
                 emit=self.emit,
                 should_stop=self._stop.is_set,
@@ -362,6 +405,7 @@ class Lane:
                 stall=self.stall,
                 allow_subtasks=allow_subtasks,
                 max_subtasks=self.max_subtasks,
+                flag_hint=self.spec.flag_hint,
             )
             result = agent.run()
             status = _status_for(result)
@@ -386,6 +430,7 @@ class Lane:
                     str(result.transcript_path) if result.transcript_path else None
                 ),
                 error=result.error,
+                images=result.images,
             )
         except Exception as exc:  # noqa: BLE001 - reported as a lane failure
             self.status = "error"
@@ -510,6 +555,7 @@ class RaceCoordinator:
         network: str = "ctfnet",
         memory: str = "4g",
         start_service: bool = True,
+        build_images: bool = True,
         follow: bool = True,
         overseer: Overseer | None = None,
         max_minutes: float | None = None,
@@ -526,6 +572,7 @@ class RaceCoordinator:
         self.network = network
         self.memory = memory
         self.start_service = start_service
+        self.build_images = build_images
         self.follow = follow
         self.max_minutes = max_minutes
         self.poll_seconds = poll_seconds
@@ -616,10 +663,28 @@ class RaceCoordinator:
                 self._say(
                     f"starting challenge service ({self.challenge.compose_file()})"
                 )
-                service = self.challenge.start_service(self.docker)
-                target = self.challenge.discover_local_target(self.docker)
-                if target:
-                    self._say(f"service reachable from the sandbox at {target}")
+                service = self.challenge.start_service(
+                    self.docker, build=self.build_images
+                )
+                services = self.challenge.discover_local_targets(
+                    self.docker, self.network
+                )
+                if services:
+                    self._say(
+                        "service reachable from the sandbox at "
+                        + services[0].label
+                        + (
+                            "; also "
+                            + ", ".join(extra.label for extra in services[1:])
+                            if len(services) > 1
+                            else ""
+                        )
+                    )
+                else:
+                    self._say(
+                        "warning: no service of this stack is attached to "
+                        f"{self.network}; the lanes have no reachable target"
+                    )
 
         threads: list[threading.Thread] = []
         interrupted = False
@@ -636,6 +701,7 @@ class RaceCoordinator:
                             "max_cost": spec.max_cost,
                             "max_rounds": spec.max_rounds,
                             "no_subtasks": spec.no_subtasks,
+                            "flag_hint": spec.flag_hint,
                         },
                         indent=2,
                     ),
@@ -659,6 +725,10 @@ class RaceCoordinator:
                     self._say(f"[race] {spec.label} failed to start: {exc}")
                     continue
                 self._lanes[spec.id] = lane
+                if self.max_minutes:
+                    setter = getattr(lane, "set_deadline", None)
+                    if callable(setter):
+                        setter(time.monotonic() + self.max_minutes * 60)
                 thread = threading.Thread(
                     target=self._run_lane, args=(lane,), daemon=True
                 )
@@ -749,7 +819,12 @@ class RaceCoordinator:
                 {
                     "model": self.overseer.config.model,
                     "calls": self.overseer.calls,
-                    "hints": len(self._overseer_log),
+                    "hints": sum(
+                        1 for entry in self._overseer_log if not entry.get("rejected")
+                    ),
+                    "rejected": sum(
+                        1 for entry in self._overseer_log if entry.get("rejected")
+                    ),
                     "cost": round(self.overseer.spent, 6),
                     "log": self._overseer_log,
                 }
@@ -761,6 +836,8 @@ class RaceCoordinator:
             "solved_by": winner.id if winner else None,
             "solved_by_model": winner.model if winner else None,
             "flag": flag,
+            "target": self.challenge.reachable_target(),
+            "targets": self.challenge.reachable_targets(),
             "k": len(self.specs),
             "pass_at_k": 1 if winner else 0,
             "interrupted": interrupted,
@@ -798,7 +875,8 @@ class RaceCoordinator:
         for result in ordered:
             self._say(
                 f"  {result.spec.label} {result.spec.short_model:<28} {result.status:<9} "
-                f"${result.cost:>7.3f} {result.rounds:>3} rounds  {result.transcript or ''}"
+                f"${result.cost:>7.3f} {result.rounds:>3} rounds  {result.images:>3} img  "
+                f"{result.transcript or ''}"
             )
         hint_stats = self.hints.stats()
         if hint_stats["count"]:
@@ -806,8 +884,11 @@ class RaceCoordinator:
                 f"hints: {hint_stats['count']} published ({hint_stats['sources']})"
             )
         if self.overseer is not None:
+            delivered = sum(
+                1 for entry in self._overseer_log if not entry.get("rejected")
+            )
             self._say(
-                f"overseer: {self.overseer.calls} call(s), {len(self._overseer_log)} hint(s), "
+                f"overseer: {self.overseer.calls} call(s), {delivered} hint(s), "
                 f"${self.overseer.spent:.4f} ({self.overseer.config.model})"
             )
         self._say(f"summary: {summary_path}")
@@ -863,17 +944,20 @@ class RaceCoordinator:
                 overseer_spend=overseer.spent,
                 max_chars=overseer.config.max_digest_chars,
             )
+            grounds = digest
             advice = overseer.review(digest)
             if advice is not None and advice.action == "inspect" and advice.target:
                 target_lane = self._lane_by_label(advice.target)
                 if target_lane is not None:
+                    inspected = target_lane.recent_slice()
+                    grounds = digest + "\n" + inspected
                     advice = overseer.review(
                         digest,
                         inspect_target=advice.target,
-                        inspect_slice=target_lane.recent_slice(),
+                        inspect_slice=inspected,
                     )
             if advice is not None and advice.action == "hint" and advice.text:
-                self._deliver_hint(advice, now - started)
+                self._deliver_hint(advice, now - started, grounds=grounds)
         except (
             Exception
         ) as exc:  # noqa: BLE001 - a broken review must not kill the race
@@ -881,17 +965,38 @@ class RaceCoordinator:
         finally:
             self._review_running = False
 
-    def _deliver_hint(self, advice: Advice, elapsed: float) -> None:
+    def _deliver_hint(self, advice: Advice, elapsed: float, *, grounds: str = "") -> None:
         overseer = self.overseer
         assert overseer is not None
         target = advice.target or "*"
         if target != "*" and self._lane_by_label(target) is None:
             self._say(f"[overseer] hint for unknown lane {target!r}; broadcasting")
             target = "*"
-        already = sum(1 for entry in self._overseer_log if entry["target"] == target)
+        delivered = [entry for entry in self._overseer_log if not entry.get("rejected")]
+        already = sum(1 for entry in delivered if entry["target"] == target)
         if target != "*" and already >= overseer.config.max_hints_per_lane:
             return
         text = str(advice.text)
+        report = check_hint_grounding(
+            text=text,
+            evidence=advice.evidence,
+            grounds=grounds,
+            verified=self._verified_targets(),
+            previous=[str(entry["text"]) for entry in delivered],
+        )
+        if not report.ok:
+            self._overseer_log.append(
+                {
+                    "at": round(elapsed, 1),
+                    "target": target,
+                    "text": text,
+                    "reason": advice.reason,
+                    "evidence": advice.evidence,
+                    "rejected": report.reason,
+                }
+            )
+            self._say(f"[overseer] rejected hint for {target}: {report.reason}")
+            return
         try:
             self.hints.publish(source="overseer", kind="hint", text=text)
         except ValueError:
@@ -905,6 +1010,16 @@ class RaceCoordinator:
                 "target": target,
                 "text": text,
                 "reason": advice.reason,
+                "evidence": advice.evidence,
             }
         )
         self._say(f"[overseer] -> {target}: {text[:140]}")
+
+    def _verified_targets(self) -> list[str]:
+        """Addresses the harness itself confirmed, not ones a model claimed."""
+        verified = list(self.challenge.reachable_targets())
+        if not verified and self.challenge.is_remote_only():
+            line = self.challenge.target_line()
+            if line:
+                verified = [line]
+        return verified

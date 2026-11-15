@@ -9,7 +9,7 @@ import sys
 import time
 from pathlib import Path
 
-from antihydra.challenge import ChallengeError, resolve
+from antihydra.challenge import ChallengeError, resolve, safe_dir_name
 from antihydra.compaction import CompactionConfig
 from antihydra.env import load_dotenv
 from antihydra.llm import REASONING_EFFORTS, LLMError
@@ -51,6 +51,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="reasoning effort for all lanes (default: lanes file, else max)",
     )
     parser.add_argument(
+        "--flag-hint",
+        choices=["generic", "branded"],
+        default=None,
+        help="how prompts describe the flag: 'generic' shape or the literal "
+        "'branded' prefix (default: lanes file, else generic)",
+    )
+    parser.add_argument(
         "--lane-max-cost",
         type=float,
         default=None,
@@ -74,6 +81,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--lane-memory", default="4g", help="memory limit per lane")
     parser.add_argument(
         "--timeout", type=float, default=300.0, help="command timeout per lane"
+    )
+    parser.add_argument(
+        "--max-command-timeout",
+        type=float,
+        default=600.0,
+        help=(
+            "hard ceiling for one run_command, even when the model asks for more "
+            "(default 600s); commands are also clamped to the remaining race budget"
+        ),
     )
     parser.add_argument(
         "--max-minutes", type=float, default=None, help="stop the race after N minutes"
@@ -149,6 +165,7 @@ def main(argv: list[str] | None = None) -> int:
             lanes_file,
             temperature=args.temperature,
             reasoning_effort=args.reasoning_effort,
+            flag_hint=args.flag_hint,
             max_cost=args.lane_max_cost,
             max_rounds=args.max_rounds,
             no_subtasks=args.no_subtasks,
@@ -175,8 +192,8 @@ def main(argv: list[str] | None = None) -> int:
     runtime = Runtime(api_key)
     compaction_llm = runtime.compaction_llm(compact_model) if compact_model else None
 
-    race_dir = (
-        Path(args.race_dir) / f"{time.strftime('%Y%m%d-%H%M%S')}__{challenge.name}"
+    race_dir = Path(args.race_dir) / (
+        f"{time.strftime('%Y%m%d-%H%M%S')}__{safe_dir_name(challenge.name)}"
     )
     compaction = CompactionConfig(enabled=not args.no_compaction)
     stall = StallConfig(enabled=not args.no_stall_detection)
@@ -220,6 +237,7 @@ def main(argv: list[str] | None = None) -> int:
             memory=args.lane_memory,
             platform=args.platform,
             timeout=args.timeout,
+            max_command_timeout=args.max_command_timeout,
             log_dir=lane_dir,
             sandbox_label=lane_label(race_dir.name, spec),
             emit=emit,

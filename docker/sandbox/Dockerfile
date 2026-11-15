@@ -20,14 +20,15 @@ RUN dpkg --add-architecture i386 \
  && apt-get update \
  && apt-get install -y \
       bash coreutils curl wget ca-certificates netcat-openbsd socat nmap \
-      git jq unzip zip file vim less bsdmainutils \
-      build-essential cmake make pkg-config \
+      git jq unzip zip file vim less tmux bsdmainutils \
+      build-essential cmake make pkg-config patchelf \
       gcc-multilib g++-multilib libc6-dev-i386 \
       gdb gdbserver ltrace strace binutils \
       python3 python3-dev python3-pip python3-venv \
       libssl-dev libffi-dev zlib1g-dev libjpeg-dev libpng-dev libtiff-dev libbz2-dev \
       libgmp-dev libmpfr-dev libeigen3-dev libfplll-dev libz3-dev libhwloc-dev \
       binwalk sleuthkit foremost testdisk dcfldd xfsprogs pngcheck \
+      tshark tcpdump p7zip-full \
       libimage-exiftool-perl steghide imagemagick \
       tesseract-ocr tesseract-ocr-eng ffmpeg sox \
       ruby ruby-dev \
@@ -91,7 +92,7 @@ RUN gem install --no-document zsteg
 # python CTF libraries
 RUN pip3 install --no-cache-dir --upgrade pip setuptools wheel \
  && pip3 install --no-cache-dir \
-      pwntools pycryptodome sympy gmpy2 requests Pillow \
+      pwntools pycryptodome sympy gmpy2 requests Pillow scapy \
       z3-solver pytesseract scipy numpy capstone unicorn \
       ropgadget fpylll flask volatility3 PyJWT tqdm angr
 

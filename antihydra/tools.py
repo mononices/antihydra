@@ -3,13 +3,29 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from .blackboard import Blackboard
 from .challenge import Challenge
 from .hints import HintBus
-from .sandbox import Sandbox
+from .images import (
+    ATTACHMENT_DIR,
+    DEFAULT_MAX_DIMENSION,
+    MAX_IMAGE_BYTES,
+    MAX_IMAGES_PER_AGENT,
+    MAX_READ_BYTES,
+    SUPPORTED_MEDIA_TYPES,
+    AttachedImage,
+    encode,
+    extension_for,
+    parse_crop,
+    prepare_script,
+    slug,
+    sniff_media_type,
+)
+from .sandbox import Sandbox, SandboxError
 
 TOOL_OUTPUT_LIMIT = 16000
 
@@ -70,6 +86,38 @@ class AgentContext:
     hint_cursor: int = 0
     actor: str = "main"
     spawn_subtask: Callable[..., dict] | None = None
+    deadline: float | None = None  # time.monotonic() wall-clock budget for the run
+    max_command_timeout: float | None = None  # hard ceiling for one run_command
+    pending_images: list[AttachedImage] = field(default_factory=list)
+    images_used: int = 0
+    max_images: int = MAX_IMAGES_PER_AGENT
+    vision_supported: bool | None = None
+
+
+def clamp_command_timeout(
+    requested: float, context: AgentContext, *, minimum: float = 5.0
+) -> tuple[float, str | None]:
+    """Bound one command by the run deadline and the per-command ceiling."""
+    limits = [float(requested)]
+    notes: list[str] = []
+    if context.max_command_timeout is not None:
+        limits.append(float(context.max_command_timeout))
+    if context.deadline is not None:
+        remaining = context.deadline - time.monotonic()
+        if remaining <= minimum:
+            return 0.0, (
+                "the run is out of time; stop starting long commands and finish or "
+                "submit what you have"
+            )
+        limits.append(remaining - 1.0)
+    effective = max(min(limits), 0.0)
+    if effective + 0.5 < float(requested):
+        notes.append(
+            f"timeout clamped from {float(requested):.0f}s to {effective:.0f}s "
+            "(run budget / per-command ceiling); split the work into smaller steps "
+            "or hand the long job to a spawn_subtask worker"
+        )
+    return effective, "; ".join(notes) or None
 
 
 @dataclass
@@ -137,10 +185,30 @@ def _sandbox_tools(registry: ToolRegistry) -> None:
     def run_command(
         context: AgentContext, command: str, timeout: float | None = None
     ) -> dict:
-        effective = float(timeout) if timeout else context.default_timeout
+        requested = float(timeout) if timeout else context.default_timeout
+        effective, note = clamp_command_timeout(requested, context)
+        if effective <= 0:
+            return _error(note or "no time left in the run for more commands")
         payload = context.sandbox.exec(command, timeout=effective).to_dict()
         payload["stdout"] = clip(payload["stdout"])
         payload["stderr"] = clip(payload["stderr"])
+        payload["timeout_seconds"] = round(effective, 1)
+        if note:
+            payload["timeout_note"] = note
+        if payload.get("timed_out"):
+            payload["hint"] = (
+                "command timed out; do not rerun it unchanged. Split it into smaller "
+                "steps that write intermediate results to files, or hand the long job "
+                "to a spawn_subtask worker that can report a summary."
+            )
+        elif payload.get("killed") == "output_flood":
+            payload["hint"] = (
+                "killed early: the command kept printing the same output "
+                f"({payload.get('killed_note')}). That usually means a program is "
+                "waiting for input that never came - feed it stdin (a here-doc, "
+                "`yes 5 |`, or redirect a file), or drive it from a script with "
+                "short read timeouts (pwntools: context.timeout, recvuntil timeout=)."
+            )
         return payload
 
     def create_file(context: AgentContext, path: str, content: str) -> dict:
@@ -151,6 +219,110 @@ def _sandbox_tools(registry: ToolRegistry) -> None:
         return {
             "path": path,
             "content": clip(context.sandbox.read_text(path, limit=TOOL_OUTPUT_LIMIT)),
+        }
+
+    def view_image(
+        context: AgentContext,
+        path: str,
+        question: str | None = None,
+        detail: str = "auto",
+        crop: str | None = None,
+        max_dimension: float | None = None,
+    ) -> dict:
+        if context.vision_supported is False:
+            return _error(
+                "this model does not accept image input; switch to a multimodal model "
+                "or fall back to exiftool/strings/OCR extraction"
+            )
+        if context.images_used >= context.max_images:
+            return _error(
+                f"image limit reached ({context.max_images} per run); describe the "
+                "remaining evidence in text instead"
+            )
+        detail_value = str(detail or "auto").strip().lower()
+        if detail_value not in ("auto", "low", "high"):
+            return _error("detail must be one of: auto, low, high")
+        try:
+            crop_spec = parse_crop(crop or "")
+        except ValueError as exc:
+            return _error(str(exc))
+
+        original = path
+        size = context.sandbox.file_size(original)
+        if size < 0:
+            return _error(f"no such file inside the sandbox: {original}")
+        dimension = int(max_dimension) if max_dimension else DEFAULT_MAX_DIMENSION
+        dimension = max(min(dimension, 2048), 64)
+
+        raw: bytes | None = None
+        media_type: str | None = None
+        rendered: str | None = None
+        if crop_spec is None and size <= MAX_IMAGE_BYTES:
+            candidate = context.sandbox.read_bytes(original, limit=MAX_IMAGE_BYTES)
+            media_type = sniff_media_type(candidate)
+            if media_type in SUPPORTED_MEDIA_TYPES:
+                raw = candidate
+        if raw is None:
+            if size > MAX_READ_BYTES:
+                return _error(
+                    f"{original} is {size} bytes, over the {MAX_READ_BYTES} byte read "
+                    "limit; extract or crop a smaller file first"
+                )
+            for fmt in ("png", "jpeg"):
+                rendered = (
+                    f"{ATTACHMENT_DIR}/{slug(original)}"
+                    f"{'-' + slug(crop_spec) if crop_spec else ''}{extension_for('image/' + fmt)}"
+                )
+                command = prepare_script(
+                    original,
+                    rendered,
+                    fmt=fmt,
+                    crop=crop_spec,
+                    max_dimension=dimension,
+                    upscale=crop_spec is not None or size < 64_000,
+                )
+                result = context.sandbox.exec(command, timeout=120)
+                if result.exit_code != 0:
+                    return _error(
+                        f"failed to render {original}: {result.stderr.strip()[:300]}"
+                    )
+                try:
+                    candidate = context.sandbox.read_bytes(
+                        rendered, limit=MAX_IMAGE_BYTES
+                    )
+                except SandboxError:
+                    continue  # still too large at this quality; try the next format
+                media_type = sniff_media_type(candidate)
+                if media_type in SUPPORTED_MEDIA_TYPES:
+                    raw = candidate
+                    break
+        if raw is None or media_type is None:
+            return _error(
+                f"could not produce a supported image under {MAX_IMAGE_BYTES} bytes "
+                "from " + original + "; try a smaller crop or max_dimension"
+            )
+
+        image = AttachedImage(
+            path=original,
+            media_type=media_type,
+            payload=encode(raw),
+            detail=detail_value,
+            question=str(question or "").strip(),
+        )
+        context.pending_images.append(image)
+        context.images_used += 1
+        return {
+            "status": "attached",
+            "path": original,
+            "rendered": rendered or original,
+            "media_type": media_type,
+            "bytes": image.bytes,
+            "detail": detail_value,
+            "pending": len(context.pending_images),
+            "message": (
+                "the image is attached to your next message; look at it before "
+                "running more pixel-level commands"
+            ),
         }
 
     registry.register(
@@ -169,12 +341,54 @@ def _sandbox_tools(registry: ToolRegistry) -> None:
                     },
                     "timeout": {
                         "type": "number",
-                        "description": "optional timeout in seconds",
+                        "description": (
+                            "optional timeout in seconds; clamped to the remaining run "
+                            "budget and the per-command ceiling"
+                        ),
                     },
                 },
                 "required": ["command"],
             },
             handler=run_command,
+        )
+    )
+    registry.register(
+        ToolSpec(
+            name="view_image",
+            description=(
+                "Render an image from the sandbox into your context so you can look at "
+                "it (screenshots, video frames, stego output, diagrams, PDF pages). "
+                "Prefer this over pixel statistics, hex-dumping or OCR guessing. "
+                "Use crop=\"x,y,w,h\" to zoom into a region; large images are "
+                "downscaled, small crops are enlarged."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "absolute path of the image inside the sandbox",
+                    },
+                    "question": {
+                        "type": "string",
+                        "description": "what to look for, e.g. 'read the text in this frame'",
+                    },
+                    "detail": {
+                        "type": "string",
+                        "description": "vision detail level: auto, low or high",
+                    },
+                    "crop": {
+                        "type": "string",
+                        "description": "optional region x,y,w,h in pixels",
+                    },
+                    "max_dimension": {
+                        "type": "number",
+                        "description": "optional longest-side cap before sending (default 1200)",
+                    },
+                },
+                "required": ["path"],
+            },
+            handler=view_image,
         )
     )
     registry.register(
